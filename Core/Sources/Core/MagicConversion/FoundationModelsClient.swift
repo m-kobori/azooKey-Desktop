@@ -94,6 +94,13 @@ public enum FoundationModelsClient {
         @Guide(description: "The transformed text")
         public var result: String
     }
+
+    // Kiwi: 候補補正（LLMReviser）用。単一 result ではなく複数の表記候補を構造化生成する。
+    @Generable
+    public struct RevisionResponse: Codable {
+        @Guide(description: "Natural Japanese surface candidates for the given reading, most natural first", .count(1...5))
+        public var candidates: [String]
+    }
     #endif
 
     public static func sendRequest(_ request: OpenAIRequest, logger: ((String) -> Void)? = nil) async throws -> [String] {
@@ -181,6 +188,44 @@ public enum FoundationModelsClient {
         throw FoundationModelsError.unavailable(.frameworkNotAvailable)
         #endif
     }
+
+    // Kiwi: 候補補正用。複数の表記候補を構造化生成で返す（LLMReviser から利用）。
+    public static func sendRevisionRequest(_ prompt: String, logger: ((String) -> Void)? = nil) async throws -> [String] {
+        #if canImport(FoundationModels)
+        logger?("Foundation Models revision request started")
+
+        let systemModel = SystemLanguageModel.default
+        switch systemModel.availability {
+        case .available:
+            break
+        case .unavailable(let reason):
+            logger?("Foundation Models not available: \(reason)")
+            let mappedReason: FoundationModelsAvailability.UnavailabilityReason = switch reason {
+            case .deviceNotEligible:
+                .deviceNotEligible
+            case .appleIntelligenceNotEnabled:
+                .appleIntelligenceNotEnabled
+            case .modelNotReady:
+                .modelNotReady
+            @unknown default:
+                .deviceNotEligible
+            }
+            throw FoundationModelsError.unavailable(mappedReason)
+        @unknown default:
+            logger?("Foundation Models availability unknown")
+            throw FoundationModelsError.unavailable(.deviceNotEligible)
+        }
+
+        let session = LanguageModelSession(model: systemModel)
+        let response = try await session.respond(to: prompt, generating: RevisionResponse.self)
+        logger?("Received \(response.content.candidates.count) revision candidates")
+        return response.content.candidates
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        #else
+        throw FoundationModelsError.unavailable(.frameworkNotAvailable)
+        #endif
+    }
 }
 
 // Compatibility wrapper for older macOS versions
@@ -204,6 +249,14 @@ public enum FoundationModelsClientCompat {
     public static func sendTextTransformRequest(_ prompt: String, logger: ((String) -> Void)? = nil) async throws -> String {
         if #available(macOS 26.0, *) {
             return try await FoundationModelsClient.sendTextTransformRequest(prompt, logger: logger)
+        } else {
+            throw FoundationModelsError.unavailable(.osVersionTooOld)
+        }
+    }
+
+    public static func sendRevisionRequest(_ prompt: String, logger: ((String) -> Void)? = nil) async throws -> [String] {
+        if #available(macOS 26.0, *) {
+            return try await FoundationModelsClient.sendRevisionRequest(prompt, logger: logger)
         } else {
             throw FoundationModelsError.unavailable(.osVersionTooOld)
         }

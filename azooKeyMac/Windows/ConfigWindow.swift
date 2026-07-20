@@ -20,6 +20,7 @@ struct ConfigWindow: View {
     @ConfigState private var aiBackend = Config.AIBackendPreference()
     @ConfigState private var kiwiHistoryEnabled = Config.KiwiHistoryEnabled()
     @ConfigState private var kiwiLLMReviserEnabled = Config.KiwiLLMReviserEnabled()
+    @ConfigState private var kiwiEnglishSuggestionEnabled = Config.KiwiEnglishSuggestionEnabled()
 
     @State private var converterServerClient = ConverterServerClient()
     @State private var converterSettingDescriptors: [String: ConverterSettingDescriptor] = [:]
@@ -878,6 +879,12 @@ struct ConfigWindow: View {
 
             Section {
                 Toggle("変換履歴を保存（予測変換の基盤）", isOn: $kiwiHistoryEnabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("英語モードでもサジェストを表示", isOn: $kiwiEnglishSuggestionEnabled)
+                    Text("英字の入力を下線付きで受け、過去に確定した英語の語句をサジェストします。Caps Lockで英語/日本語を切り替えられます。OFFにすると英語は直接挿入（サジェストなし）です。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("LLMによる候補補正を有効化", isOn: $kiwiLLMReviserEnabled)
                         .onChange(of: kiwiLLMReviserEnabled.value) { enabled in

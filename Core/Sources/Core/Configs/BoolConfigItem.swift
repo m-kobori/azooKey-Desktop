@@ -80,4 +80,11 @@ extension Config {
         static let `default` = false
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.llmReviserEnabled"
     }
+    /// Kiwi: 英語モードでも composing（下線入力）してサジェストを出す設定。
+    /// OFF にすると従来どおり英語は直接挿入（サジェストなし）になる。
+    public struct KiwiEnglishSuggestionEnabled: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.englishSuggestionEnabled"
+    }
 }

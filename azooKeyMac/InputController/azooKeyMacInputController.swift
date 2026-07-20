@@ -261,9 +261,22 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         self.appMenu
     }
 
+    /// Kiwi: Caps Lock の状態変化（flagsChanged）も受け取る。
+    override func recognizedEvents(_ sender: Any!) -> Int {
+        Int(NSEvent.EventTypeMask([.keyDown, .flagsChanged]).rawValue)
+    }
+
     // swiftlint:disable:next cyclomatic_complexity
     @MainActor override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event, let client = sender as? IMKTextInput else {
+            return false
+        }
+        // Kiwi: Caps Lock で言語を切り替える（ON=英語 / OFF=日本語）。
+        if event.type == .flagsChanged {
+            if event.keyCode == 57 {
+                let english = event.modifierFlags.contains(.capsLock)
+                self.applyCapsLockLanguageSwitch(toEnglish: english, client: client)
+            }
             return false
         }
         guard event.type == .keyDown else {
@@ -341,8 +354,17 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             }
         }
 
+        // Kiwi: Caps Lock はモード切替として使うため、点灯中の大文字化は打ち消す
+        // （Shift 併用時のみ大文字。caps を除いた修飾で文字を再解決する）。
+        var eventCore = event.keyEventCore
+        if event.modifierFlags.contains(.capsLock),
+           let neutralCharacters = event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.capsLock)) {
+            eventCore.characters = neutralCharacters
+            eventCore.charactersIgnoringModifiers = neutralCharacters
+        }
+
         if let handled = self.handleKeyEventWithConverterServer(
-            event: event.keyEventCore,
+            event: eventCore,
             client: client,
             enableSuggestion: aiBackendEnabled,
             optionDirectInputText: event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.option))
@@ -555,6 +577,28 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             return
         }
         self.currentConverterView = response.snapshot
+    }
+
+    /// Kiwi: Caps Lock による言語切替。composing 中なら現在の入力を確定してから切り替える。
+    @MainActor private func applyCapsLockLanguageSwitch(toEnglish english: Bool, client: IMKTextInput) {
+        let target: InputLanguage = english ? .english : .japanese
+        guard self.inputLanguage != target else { return }
+        if self.inputState != .none {
+            // 変換途中のテキストを確定（insertText effect で反映）してから切り替える。
+            if let response = self.converterServerClient.sendIfSessionOpenSync({ _ in
+                .composition(.commit(inputState: ConverterInputState(self.inputState)))
+            }) {
+                self.inputState = response.inputState.inputState
+                self.currentConverterView = response.snapshot
+                for effect in response.effects {
+                    self.apply(effect, client: client)
+                }
+                self.refreshMarkedText()
+                self.refreshCandidateWindow()
+                self.refreshPredictionWindow()
+            }
+        }
+        self.switchInputLanguage(target, client: client)
     }
 
     @MainActor func switchInputLanguage(_ language: InputLanguage, client: IMKTextInput) {

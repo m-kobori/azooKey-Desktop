@@ -62,8 +62,16 @@ public enum InputState: Sendable, Hashable {
                 case .japanese:
                     return (.appendPieceToMarkedText(string), .transition(.composing))
                 case .english:
+                    // Kiwi: 英語サジェストが有効なら、英字は composing（下線入力）を開始して
+                    // 履歴サジェスト・候補ウィンドウを使えるようにする（数字・記号は従来どおり直接挿入）。
+                    let inputString = string.inputString(preferIntention: true)
+                    if Config.KiwiEnglishSuggestionEnabled().value,
+                       !inputString.isEmpty,
+                       inputString.allSatisfy({ $0.isASCII && $0.isLetter }) {
+                        return (.appendPieceToMarkedText(string), .transition(.composing))
+                    }
                     // 連結する
-                    return (.insertWithoutMarkedText(string.inputString(preferIntention: true)), .fallthrough)
+                    return (.insertWithoutMarkedText(inputString), .fallthrough)
                 }
             case .deadKey(let diacritic):
                 if inputLanguage == .english {

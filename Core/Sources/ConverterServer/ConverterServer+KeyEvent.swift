@@ -10,6 +10,8 @@ extension ConverterServer {
     ) throws -> ConverterServerResponse {
         let session = try getSession(sessionID)
         session.setContext(request.context)
+        // Kiwi: 現在の入力言語を manager に伝える（英語 composing 時のライブ変換抑制・履歴記録用）。
+        session.manager.setCurrentInputLanguage(request.inputLanguage)
         Config.DebugPredictiveTyping().value = request.enablePredictiveTyping
         Config.DebugTypoCorrection().value = request.enableTypoCorrection
 
@@ -121,6 +123,10 @@ extension ConverterServer {
             let text = manager.commitMarkedText(inputState: inputState)
             if !text.isEmpty {
                 effects.append(.insertText(text))
+                // Kiwi: 英語モードの確定は履歴に記録し、次回サジェストに使う。
+                if request.inputLanguage == .english {
+                    manager.recordEnglishCommit(text, leftSideContext: leftSideContext ?? "")
+                }
             }
         case .editSegment(let count):
             manager.editSegment(count: count)

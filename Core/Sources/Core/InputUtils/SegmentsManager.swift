@@ -36,7 +36,27 @@ public final class SegmentsManager {
     private var lastInputStyle: InputStyle = .direct
 
     private var liveConversionEnabled: Bool {
-        Config.LiveConversion().value
+        // Kiwi: 英語モードの composing ではライブ変換を無効にする（ASCII をそのまま表示する）。
+        Config.LiveConversion().value && self.currentInputLanguage == .japanese
+    }
+
+    /// Kiwi: 現在の入力言語。キーイベントごとにサーバが設定する（ライブ変換抑制・英語履歴記録用）。
+    private var currentInputLanguage: InputLanguage = .japanese
+
+    /// Kiwi: サーバのキーイベント処理から現在の入力言語を伝える。
+    public func setCurrentInputLanguage(_ language: InputLanguage) {
+        self.currentInputLanguage = language
+    }
+
+    /// Kiwi: 英語モードで確定したテキストを履歴に記録する（読み＝表記）。
+    /// 次回、先頭数文字のプレフィックス一致でサジェストされる。
+    public func recordEnglishCommit(_ text: String, leftSideContext: String) {
+        guard Config.KiwiHistoryEnabled().value, let historyManager = self.historyManager else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else { return }
+        Task.detached(priority: .utility) {
+            historyManager.record(reading: trimmed, surface: trimmed, leftContext: leftSideContext)
+        }
     }
     private var zenzaiPersonalizationLevel: Config.ZenzaiPersonalizationLevel.Value {
         Config.ZenzaiPersonalizationLevel().value

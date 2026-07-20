@@ -87,4 +87,11 @@ extension Config {
         static let `default` = true
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.englishSuggestionEnabled"
     }
+    /// Kiwi: 辞書ベースの読み予測（「あり」→「ありがとう」等の補完）をサジェストに含める設定。
+    /// スマホ IME の予測変換に相当する層。開発中フラグ DebugPredictiveTyping とは独立。
+    public struct KiwiDictionaryPredictionEnabled: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.dictionaryPredictionEnabled"
+    }
 }

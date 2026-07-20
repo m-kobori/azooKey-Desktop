@@ -21,6 +21,7 @@ struct ConfigWindow: View {
     @ConfigState private var kiwiHistoryEnabled = Config.KiwiHistoryEnabled()
     @ConfigState private var kiwiLLMReviserEnabled = Config.KiwiLLMReviserEnabled()
     @ConfigState private var kiwiEnglishSuggestionEnabled = Config.KiwiEnglishSuggestionEnabled()
+    @ConfigState private var kiwiDictionaryPredictionEnabled = Config.KiwiDictionaryPredictionEnabled()
 
     @State private var converterServerClient = ConverterServerClient()
     @State private var converterSettingDescriptors: [String: ConverterSettingDescriptor] = [:]
@@ -879,6 +880,12 @@ struct ConfigWindow: View {
 
             Section {
                 Toggle("変換履歴を保存（予測変換の基盤）", isOn: $kiwiHistoryEnabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("辞書による予測変換をサジェストに含める", isOn: $kiwiDictionaryPredictionEnabled)
+                    Text("読みの途中から辞書の語彙を補完します（例:「あり」→「ありがとう」）。スマホIMEの予測変換に相当します。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("英語モードでもサジェストを表示", isOn: $kiwiEnglishSuggestionEnabled)
                     Text("英字の入力を下線付きで受け、過去に確定した英語の語句をサジェストします。Caps Lockで英語/日本語を切り替えられます。OFFにすると英語は直接挿入（サジェストなし）です。")

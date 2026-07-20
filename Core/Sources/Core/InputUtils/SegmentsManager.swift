@@ -604,12 +604,33 @@ public final class SegmentsManager {
         return self.historyPredictionCandidates + dedupedBase
     }
 
-    /// Kiwi: サジェスト（前方一致履歴＋準備済み LLM 補正）の結合リスト（surface で dedup）。
+    /// Kiwi: 辞書ベースの読み予測（predictionResults）をサジェスト用候補に変換する。
+    ///
+    /// 予測候補は読みが現在の入力より長いため、そのまま submit すると composingCount が
+    /// 入力と食い違う恐れがある。履歴サジェストと同じく「composingCount = 入力全体」の
+    /// Candidate に包み直し、確定時に読み全体が surface へ置き換わるようにする。
+    private var dictionaryPredictionSuggestionCandidates: [Candidate] {
+        guard Config.KiwiDictionaryPredictionEnabled().value, let rawCandidates else { return [] }
+        let inputCount = self.composingText.input.count
+        return rawCandidates.predictionResults.prefix(5).map { candidate in
+            Candidate(
+                text: candidate.text,
+                value: candidate.value,
+                composingCount: .inputCount(inputCount),
+                lastMid: candidate.lastMid,
+                data: candidate.data
+            )
+        }
+    }
+
+    /// Kiwi: サジェスト（前方一致履歴＋辞書予測＋準備済み LLM 補正）の結合リスト（surface で dedup）。
     /// 入力中の候補ウィンドウ表示と、下キーのサジェスト選択の両方で同じ内容を使う。
+    /// 順序: 履歴（個人の実績）→ 辞書予測（一般語彙）→ LLM 補正。
     private var suggestionLeadCandidates: [Candidate] {
         let llmCandidates = self.llmRevisedTarget == self.convertTarget ? self.llmRevisedCandidates : []
         var seen = Set<String>()
-        return (self.suggestionHistoryCandidates + llmCandidates).filter { seen.insert($0.text).inserted }
+        return (self.suggestionHistoryCandidates + self.dictionaryPredictionSuggestionCandidates + llmCandidates)
+            .filter { seen.insert($0.text).inserted }
     }
 
     private var baseRawCandidatesList: [Candidate]? {
@@ -753,8 +774,10 @@ public final class SegmentsManager {
                 leftSideContext: leftSideContext,
                 rightSideContext: rightSideContext,
                 requestRichCandidates: requestRichCandidates,
-                requireJapanesePrediction: Config.DebugPredictiveTyping().value ? .manualMix : .disabled,
-                requireEnglishPrediction: Config.DebugPredictiveTyping().value ? .manualMix : .disabled
+                // Kiwi: 辞書ベースの読み予測（「あり」→「ありがとう」等の補完）を正式に有効化。
+                // 開発中フラグ（DebugPredictiveTyping）とは独立に、KiwiDictionaryPredictionEnabled で制御する。
+                requireJapanesePrediction: (Config.DebugPredictiveTyping().value || Config.KiwiDictionaryPredictionEnabled().value) ? .manualMix : .disabled,
+                requireEnglishPrediction: (Config.DebugPredictiveTyping().value || Config.KiwiDictionaryPredictionEnabled().value) ? .manualMix : .disabled
             )
         )
         self.rawCandidates = result

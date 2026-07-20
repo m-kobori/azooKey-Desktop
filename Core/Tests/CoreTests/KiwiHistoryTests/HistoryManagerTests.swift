@@ -69,6 +69,15 @@ private func makeTemporaryManager() throws -> (HistoryManager, URL) {
     #expect(manager.count() == 0)
 }
 
+@Test func seedDataHasNoDuplicatesAndValidEntries() {
+    let entries = HistorySeedData.entries
+    // (reading, surface) の重複なし（ユニーク制約で黙って落ちるのを防ぐ）
+    let keys = entries.map { "\($0.reading)\u{1F}\($0.surface)" }
+    #expect(Set(keys).count == entries.count)
+    // 全エントリが非空・読み2文字以上（予測の下限）
+    #expect(entries.allSatisfy { !$0.reading.isEmpty && !$0.surface.isEmpty && $0.reading.count >= 2 })
+}
+
 @Test func seedIfNeededAppliesNewVersionOnly() throws {
     let (manager, directory) = try makeTemporaryManager()
     defer { try? FileManager.default.removeItem(at: directory) }

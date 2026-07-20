@@ -69,6 +69,27 @@ private func makeTemporaryManager() throws -> (HistoryManager, URL) {
     #expect(manager.count() == 0)
 }
 
+@Test func seedIfNeededAppliesNewVersionOnly() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    // v1 を投入
+    manager.seedIfNeeded([("よろ", "よろしく")], version: 1)
+    #expect(manager.count() == 1)
+
+    // 同じバージョンでは再投入しない
+    manager.seedIfNeeded([("よろ", "よろしく"), ("best", "Best regards,")], version: 1)
+    #expect(manager.count() == 1)
+
+    // 新しいバージョンなら差分（未存在分）だけ追加される
+    manager.seedIfNeeded([("よろ", "よろしく"), ("best", "Best regards,")], version: 2)
+    #expect(manager.count() == 2)
+
+    // 英語シードは小文字読みでも前方一致で引ける
+    let candidates = manager.predict(reading: "bes", leftContext: "", limit: 5)
+    #expect(candidates.first?.surface == "Best regards,")
+}
+
 @Test func decayDailyRunsOncePerDay() throws {
     let (manager, directory) = try makeTemporaryManager()
     defer { try? FileManager.default.removeItem(at: directory) }

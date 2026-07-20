@@ -212,22 +212,37 @@ public final class HistoryManager: @unchecked Sendable {
         (try? dbQueue.read { db in try HistoryEntry.fetchCount(db) }) ?? 0
     }
 
-    /// 初期データ（定型句など）を、まだ一度も投入していないときに投入する。
+    /// meta テーブルの投入済みシードバージョンキー。
+    private static let seedVersionKey = "seedVersion"
+
+    /// 初期データ（定型句など）を、まだ投入していないバージョン分だけ投入する。
     ///
-    /// コールドスタート（該当読みの履歴が無く予測バーに何も出ない）を避けるため、初回起動時に呼ぶ。
-    /// 判定は「DB が空か」ではなく「同じ `source`（既定 "seed"）の行が既に存在するか」で行う。
-    /// これにより、ユーザーが既に別途 "ime" 履歴を貯めていてもシードは投入される。
+    /// コールドスタート（該当読みの履歴が無く予測に何も出ない）を避けるため、起動時に呼ぶ。
+    /// meta テーブルの `seedVersion` と `version` を比較し、新しい場合のみ差分投入する
+    /// （＝リリース後にシードを追加しても、既存 DB へ次回起動時に自動で追加される）。
+    /// 後方互換: バージョン未記録でも `source="seed"` の行が既にあれば v1 投入済みとみなす。
     /// `source="seed"` かつ低頻度（0.5）なので、実利用の学習（"ime"）が優先され、
     /// 同一 (reading, surface) が既にあれば重複挿入しない（ユニーク制約）。
-    public func seedIfNeeded(_ entries: [(reading: String, surface: String)], source: String = "seed") {
+    public func seedIfNeeded(
+        _ entries: [(reading: String, surface: String)],
+        version: Int = HistorySeedData.version,
+        source: String = "seed"
+    ) {
         do {
             try dbQueue.write { db in
-                let alreadySeeded = (try Int.fetchOne(
+                let storedVersion = try String.fetchOne(
+                    db,
+                    sql: "SELECT value FROM meta WHERE key = ?",
+                    arguments: [Self.seedVersionKey]
+                ).flatMap(Int.init) ?? 0
+                let hasSeedRows = (try Int.fetchOne(
                     db,
                     sql: "SELECT COUNT(*) FROM \(HistoryEntry.databaseTableName) WHERE source = ?",
                     arguments: [source]
                 ) ?? 0) > 0
-                guard !alreadySeeded else { return }
+                // 旧ロジック（バージョン管理以前）で投入済みの DB は v1 とみなす。
+                let effectiveVersion = (storedVersion == 0 && hasSeedRows) ? 1 : storedVersion
+                guard effectiveVersion < version else { return }
                 for entry in entries where !entry.reading.isEmpty && !entry.surface.isEmpty {
                     // 同一 (reading, surface) の重複はスキップ（ユニーク制約）。
                     let exists = try HistoryEntry
@@ -245,6 +260,10 @@ public final class HistoryManager: @unchecked Sendable {
                     )
                     try record.insert(db)
                 }
+                try db.execute(
+                    sql: "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    arguments: [Self.seedVersionKey, String(version)]
+                )
             }
         } catch {
             self.logger?("HistoryManager.seedIfNeeded failed: \(error)")

@@ -7,7 +7,14 @@ import Foundation
 /// （単語1つの変換は本体の変換エンジンで十分なため、あえて含めない）。
 /// `HistoryManager.seedIfEmpty` から使う。実利用の学習が貯まれば自然に上書きされる。
 public enum HistorySeedData {
-    /// (読み, 表層) の組。読みはひらがな（`convertTarget` と揃える）。
+    /// シードのバージョン。エントリを追加したらインクリメントする。
+    /// `HistoryManager.seedIfNeeded` が meta テーブルの投入済みバージョンと比較し、
+    /// 新しい場合のみ差分投入する（既存 DB にも後から追加できる）。
+    /// v1: 日本語定型句 / v2: 英語定型句を追加
+    public static let version = 2
+
+    /// (読み, 表層) の組。読みは日本語はひらがな（`convertTarget` と揃える）、
+    /// 英語は小文字（英語 composing の入力そのまま。照合は ASCII 大文字小文字を区別しない）。
     public static let entries: [(reading: String, surface: String)] = [
         // あいさつ
         ("おはようございます", "おはようございます"),
@@ -56,5 +63,22 @@ public enum HistorySeedData {
         // 日常
         ("おめでとうございます", "おめでとうございます"),
         ("あけましておめでとうございます", "あけましておめでとうございます"),
+
+        // 英語（ビジネスメール定型句・v2）
+        ("thank you", "Thank you very much."),
+        ("thank you for", "Thank you for your reply."),
+        ("thank you for your", "Thank you for your support."),
+        ("best regards", "Best regards,"),
+        ("kind regards", "Kind regards,"),
+        ("regards", "Regards,"),
+        ("sincerely", "Sincerely,"),
+        ("i hope", "I hope this email finds you well."),
+        ("looking forward", "Looking forward to hearing from you."),
+        ("please let me know", "Please let me know if you have any questions."),
+        ("please find", "Please find attached"),
+        ("could you please", "Could you please"),
+        ("sorry for", "Sorry for the late reply."),
+        ("as discussed", "As discussed,"),
+        ("i appreciate", "I appreciate your help."),
     ]
 }

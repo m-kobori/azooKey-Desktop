@@ -68,4 +68,16 @@ extension Config {
         static let `default` = true
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.includeContextInAITransform"
     }
+    /// Kiwi: 確定した変換を SQLite 履歴に保存する設定（予測変換の基盤）
+    public struct KiwiHistoryEnabled: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.historyEnabled"
+    }
+    /// Kiwi: 変換候補をローカル LLM で補正・並び替えする設定（デフォルト OFF）
+    public struct KiwiLLMReviserEnabled: BoolConfigItem {
+        public init() {}
+        static let `default` = false
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.llmReviserEnabled"
+    }
 }

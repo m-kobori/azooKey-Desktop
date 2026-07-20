@@ -26,6 +26,10 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
     private var lastPredictionCandidates: [String] = []
     private var lastPredictionUpdateTime: TimeInterval = 0
     private var predictionHideWorkItem: DispatchWorkItem?
+    /// Kiwi: LLM 補正候補を予測バーへ反映するための非同期リフレッシュ（デバウンス＋キャンセル用）。
+    private var llmPredictionRefreshTask: Task<Void, Never>?
+    /// Kiwi: LLM 補正を既に予測バーへ反映済みの読み。同一読みでは再反映せず、選択操作を壊さない。
+    private var llmAppliedTarget: String?
 
     private var replaceSuggestionWindow: NSWindow
     private var replaceSuggestionsViewController: ReplaceSuggestionsViewController
@@ -400,7 +404,59 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         self.refreshCandidateWindow()
         self.refreshPredictionWindow()
         self.refreshReplaceSuggestionWindow()
+        self.scheduleLLMPredictionRefreshIfNeeded()
         return response.handled
+    }
+
+    /// Kiwi: composing 中に、進行中の LLM 補正の完了を待って予測バーを更新する。
+    ///
+    /// キー処理は LLM をブロックしないため、ここで非同期リクエスト（`awaitLLMPrediction`）を
+    /// デバウンス発火する。Server が推論完了まで await して LLM 候補入りの snapshot を返し、
+    /// その完了コールバックで予測バーを再描画する。読みが変わっていたら破棄する。
+    @MainActor private func scheduleLLMPredictionRefreshIfNeeded() {
+        self.llmPredictionRefreshTask?.cancel()
+        guard Config.KiwiLLMReviserEnabled().value,
+              self.inputState == .composing,
+              let target = self.currentConverterView?.convertTarget,
+              !target.isEmpty else {
+            // composing を抜けた／入力が空になったらリセット（次の入力で再び反映できる）。
+            self.llmAppliedTarget = nil
+            return
+        }
+        // 同一読みで既に反映済みなら再発火しない（矢印/マウス選択中の再描画を防ぐ）。
+        guard self.llmAppliedTarget != target else {
+            return
+        }
+        self.llmPredictionRefreshTask = Task { @MainActor [weak self] in
+            // 連続入力中の多重発火を抑える軽いデバウンス（Server 側でも推論をデバウンスする）。
+            do {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.converterServerClient.sendIfSessionOpen(
+                { _ in .composition(.awaitLLMPrediction(inputState: ConverterInputState(.composing))) },
+                completion: { [weak self] response in
+                    Task { @MainActor in
+                        guard let self, let response else { return }
+                        // 応答到着時に状態/読みが変わっていたら反映しない。
+                        // composing 中は候補ブラウズ（選択）が無いため、snapshot ごと差し替えて安全。
+                        guard self.inputState == .composing,
+                              let currentTarget = self.currentConverterView?.convertTarget,
+                              currentTarget == response.snapshot.convertTarget else {
+                            return
+                        }
+                        // 入力中の候補ウィンドウ（サジェスト＋変換候補）へ LLM 補正を反映する。
+                        self.currentConverterView = response.snapshot
+                        self.refreshCandidateWindow()
+                        self.refreshPredictionWindow()
+                        // この読みは反映済み。以後は再発火しない。
+                        self.llmAppliedTarget = currentTarget
+                    }
+                }
+            )
+        }
     }
 
     @MainActor
@@ -612,6 +668,13 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             return
         }
 
+        // Kiwi: 入力中のサジェストは候補ウィンドウ側に全部表示するため、
+        // 内容が重複する予測バーは出さない（二重表示のちらつき防止）。
+        if case .composing(let items, _) = self.currentConverterView?.candidateWindow, !items.isEmpty {
+            self.hidePredictionWindow()
+            return
+        }
+
         guard let predictions = self.currentConverterView?.predictionCandidates else {
             self.hidePredictionWindow()
             return
@@ -628,6 +691,13 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             return
         }
 
+        self.displayPredictionCandidates(predictions)
+    }
+
+    /// 予測バーの表示を更新する（表示ロジックのみ。`currentConverterView` は変更しない）。
+    /// Kiwi: LLM 補正の非同期反映（`scheduleLLMPredictionRefreshIfNeeded`）からも使い、
+    /// 候補ウィンドウ状態を壊さずに予測バーだけを差し替える。
+    private func displayPredictionCandidates(_ predictions: [ConverterPredictionCandidate]) {
         self.predictionHideWorkItem?.cancel()
         let candidates = predictions.map { prediction in
             Candidate(

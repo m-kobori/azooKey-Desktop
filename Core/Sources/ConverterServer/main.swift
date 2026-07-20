@@ -77,7 +77,7 @@ final class ConverterServer: NSObject, ConverterServerXPCProtocol, @unchecked Se
         case .handleKeyEvent(let request):
             return try handleKeyEvent(sessionID: sessionID, request: request)
         case .composition(let command):
-            return handle(command, session: session)
+            return await handle(command, session: session)
         case .candidate(let command):
             return handle(command, session: session)
         case .replaceSuggestion(let command):
@@ -122,7 +122,7 @@ final class ConverterServer: NSObject, ConverterServerXPCProtocol, @unchecked Se
     private func handle(
         _ command: ConverterCompositionCommand,
         session: ConverterSession
-    ) -> ConverterServerResponse {
+    ) async -> ConverterServerResponse {
         switch command {
         case .snapshot(let inputState):
             return makeResponse(for: session, inputState: inputState.inputState)
@@ -136,6 +136,10 @@ final class ConverterServer: NSObject, ConverterServerXPCProtocol, @unchecked Se
             let text = session.manager.commitMarkedText(inputState: inputState.inputState)
             let effects: [ConverterClientEffect] = text.isEmpty ? [] : [.insertText(text)]
             return makeResponse(for: session, inputState: .none, effects: effects, responseInputState: ConverterInputState.none)
+        case .awaitLLMPrediction(let inputState):
+            // Kiwi: 進行中の LLM 補正の完了を待ってから snapshot を返す（予測バーへ反映）。
+            await session.manager.awaitPendingLLMRevision()
+            return makeResponse(for: session, inputState: inputState.inputState)
         }
     }
 

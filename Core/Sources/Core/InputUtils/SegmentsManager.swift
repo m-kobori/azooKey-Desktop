@@ -61,10 +61,135 @@ public final class SegmentsManager {
     private var backspaceAdjustedPredictionCandidate: PredictionCandidate?
     private var backspaceTypoCorrectionLock: BackspaceTypoCorrectionLock?
 
+    /// Kiwi: 確定履歴の永続化（SQLite）。設定 OFF・コンテナ未取得・初期化失敗時は nil。
+    private lazy var historyManager: HistoryManager? = self.makeHistoryManager()
+
+    /// Kiwi: 現在の読みに一致する確定履歴から作った候補。`updateRawCandidate` で再計算し、
+    /// `rawCandidatesList` の先頭へ差し込む（＝過去の確定を最優先で提示する）。
+    private var historyPredictionCandidates: [Candidate] = []
+
+    /// Kiwi: 前方一致を含む履歴サジェスト候補（予測バーに出るものと同源）。
+    /// 下キーで開くサジェスト選択（`preferSuggestionSelection`）時に一覧の先頭へ差し込む。
+    private var suggestionHistoryCandidates: [Candidate] = []
+
+    /// Kiwi: 次に開く候補一覧を「サジェスト優先」にするか。
+    /// composing 中に下キーで候補一覧を開いたとき true（サーバのキー処理から設定）。
+    /// 新しい入力・composition 終了・候補ウィンドウ非表示で解除。
+    private var preferSuggestionSelection = false
+
+    /// Kiwi: composing 中の下キーで呼ばれ、次の候補一覧をサジェスト優先にする。
+    @MainActor public func requestSuggestionSelectionPreference() {
+        self.preferSuggestionSelection = true
+    }
+
+    /// Kiwi: LLM 補正（NT-831）。設定 OFF・バックエンド未選択時は nil。
+    private lazy var llmReviser: LLMReviser? = self.makeLLMReviser()
+    /// 進行中の LLM 補正タスク（デバウンス兼キャンセル用）。打鍵ごとに張り替える。
+    @MainActor private var llmRevisionTask: Task<Void, Never>?
+    /// LLM 補正のデバウンス遅延（ミリ秒）。連続入力中の無駄な推論を抑止する。
+    private static let llmRevisionDebounceMilliseconds = 150
+    /// Kiwi: LLM が補正した候補（`rawCandidatesList` の末尾へ dedup 追加する）。
+    /// XPC はプル型でサーバ発プッシュが無いため、非同期の結果は次のスナップショット
+    /// （候補ブラウズ等の次キーイベント）で反映される。
+    private var llmRevisedCandidates: [Candidate] = []
+    /// `llmRevisedCandidates` が対象としている読み。読みが変わったら破棄する。
+    private var llmRevisedTarget: String = ""
+
+    private func makeLLMReviser() -> LLMReviser? {
+        guard Config.KiwiLLMReviserEnabled().value else { return nil }
+        // Foundation Models（オンデバイス）既定。OpenAI 選択時のキーはアプリ側管理のため
+        // Core からは空キーで生成する（OpenAI 利用は将来、呼び出し側から注入する）。
+        return LLMReviser(backend: AIClientRevisionBackend())
+    }
+
+    private func makeHistoryManager() -> HistoryManager? {
+        guard Config.KiwiHistoryEnabled().value else { return nil }
+        do {
+            let manager: HistoryManager
+            if let containerURL = self.containerURL {
+                manager = try HistoryManager(containerURL: containerURL)
+            } else {
+                // App Group コンテナが無い環境（ローカルのアドホック署名ビルド等、App Group 未使用時）は、
+                // アプリのサポートディレクトリ配下に履歴 DB を作成する。
+                // applicationDirectoryURL は .../azooKey/memory を指すため、その親（.../azooKey）に KiwiHistory を置く。
+                let baseDirectory = self.applicationDirectoryURL.deletingLastPathComponent()
+                let databaseURL = baseDirectory
+                    .appendingPathComponent("KiwiHistory", isDirectory: true)
+                    .appendingPathComponent("history.sqlite", isDirectory: false)
+                manager = try HistoryManager(databaseURL: databaseURL)
+            }
+            // コールドスタート回避: シード未投入なら定型句を初期投入する（実利用の学習が貯まれば上書きされる）。
+            manager.seedIfNeeded(HistorySeedData.entries)
+            return manager
+        } catch {
+            self.appendDebugMessage("❌ KiwiHistory: 初期化に失敗しました: \(error)")
+            return nil
+        }
+    }
+
+    /// Kiwi: 確定した候補を履歴に記録する。DB 書き込みでメインスレッドをブロックしないよう
+    /// 値をコピーしてバックグラウンドで実行する。
+    private func recordHistoryIfNeeded(_ candidate: Candidate, leftSideContext: String) {
+        guard Config.KiwiHistoryEnabled().value, let historyManager = self.historyManager else { return }
+        let reading = self.candidateReading(candidate).toHiragana()
+        let surface = candidate.text
+        guard !reading.isEmpty, !surface.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            historyManager.record(reading: reading, surface: surface, leftContext: leftSideContext)
+        }
+    }
+
+    /// Kiwi: 現在の読み（`convertTarget`）に一致する確定履歴を候補として用意する。
+    ///
+    /// - `historyPredictionCandidates`: 読み完全一致のみ。スペース変換の一覧の先頭に差し込む
+    ///   （同じ読みの確定実績を最優先で出す。変換結果を乗っ取らない）。
+    /// - `suggestionHistoryCandidates`: 前方一致を含む全予測。下キーで開く「サジェスト選択」
+    ///   一覧の先頭に差し込む（予測バーに見えているものをそのまま矢印/マウスで選べる）。
+    ///   composingCount は入力全体を覆うため、確定すると読み全体が surface に置き換わる。
+    @MainActor private func updateHistoryPredictionCandidates(leftSideContext: String?) {
+        guard Config.KiwiHistoryEnabled().value, let historyManager = self.historyManager else {
+            self.historyPredictionCandidates = []
+            self.suggestionHistoryCandidates = []
+            return
+        }
+        let reading = self.convertTarget
+        // 1 文字だと候補が氾濫するため 2 文字以上に限定。
+        guard reading.count >= 2 else {
+            self.historyPredictionCandidates = []
+            self.suggestionHistoryCandidates = []
+            return
+        }
+        let inputCount = self.composingText.input.count
+        let makeCandidate: (HistoryCandidate) -> Candidate = { prediction in
+            Candidate(
+                text: prediction.surface,
+                value: 0,
+                composingCount: .inputCount(inputCount),
+                lastMid: MIDData.一般.mid,
+                data: [DicdataElement(
+                    word: prediction.surface,
+                    // ruby は履歴側の読み（前方一致では現在の入力より長い）。学習・履歴記録の整合のため。
+                    ruby: prediction.reading.toKatakana(),
+                    cid: CIDData.固有名詞.cid,
+                    mid: MIDData.一般.mid,
+                    value: 0
+                )]
+            )
+        }
+        let predictions = historyManager
+            .predict(reading: reading, leftContext: leftSideContext, limit: 5)
+            .filter { !$0.surface.isEmpty }
+        self.historyPredictionCandidates = predictions.filter { $0.reading == reading }.map(makeCandidate)
+        self.suggestionHistoryCandidates = predictions.map(makeCandidate)
+    }
+
     public struct PredictionCandidate: Sendable, Equatable {
         public var displayText: String
         public var appendText: String
         public var deleteCount: Int = 0
+        /// Kiwi: true の場合、確定時に読み（appendText）を追記せず `displayText` を surface として
+        /// そのまま確定する（＝履歴予測。スペースを押す前に学習語を確定できる）。
+        public var commitsSurfaceDirectly: Bool = false
     }
 
     struct BackspaceTypoCorrectionLock: Sendable {
@@ -243,6 +368,10 @@ public final class SegmentsManager {
         self.kanaKanjiConverter.stopComposition()
         self.kanaKanjiConverter.commitUpdateLearningData()
         self.rawCandidates = nil
+        self.historyPredictionCandidates = []
+        self.suggestionHistoryCandidates = []
+        self.preferSuggestionSelection = false
+        self.clearLLMRevision()
         self.didExperienceSegmentEdition = false
         self.lastOperation = .other
         self.composingText.stopComposition()
@@ -260,6 +389,10 @@ public final class SegmentsManager {
         self.composingText.stopComposition()
         self.kanaKanjiConverter.stopComposition()
         self.rawCandidates = nil
+        self.historyPredictionCandidates = []
+        self.suggestionHistoryCandidates = []
+        self.preferSuggestionSelection = false
+        self.clearLLMRevision()
         self.didExperienceSegmentEdition = false
         self.lastOperation = .other
         self.shouldShowCandidateWindow = false
@@ -420,6 +553,41 @@ public final class SegmentsManager {
     }
 
     private var rawCandidatesList: [Candidate]? {
+        guard let base = self.baseRawCandidatesList else {
+            return nil
+        }
+        // 変換範囲を手動編集した場合は読みが部分と一致しないため、履歴は差し込まない。
+        guard !self.didExperienceSegmentEdition else {
+            return base
+        }
+        // Kiwi: 下キーで開いたサジェスト選択では、サジェスト（前方一致履歴＋LLM）を
+        // 一覧の先頭に差し込む。入力中に見えている「会議の議題」等をそのまま矢印/マウスで選べる。
+        // ※ 選択中の一覧が変化しないよう、LLM は結果到着時に選択中なら破棄する（scheduleLLMRevision 側）。
+        if self.preferSuggestionSelection {
+            let suggestions = self.suggestionLeadCandidates
+            if !suggestions.isEmpty {
+                let seen = Set(suggestions.map(\.text))
+                return suggestions + base.filter { !seen.contains($0.text) }
+            }
+        }
+        // スペース変換の一覧: 読み完全一致の履歴のみ先頭に（変換結果を乗っ取らない）。
+        guard !self.historyPredictionCandidates.isEmpty else {
+            return base
+        }
+        let historySurfaces = Set(self.historyPredictionCandidates.map(\.text))
+        let dedupedBase = base.filter { !historySurfaces.contains($0.text) }
+        return self.historyPredictionCandidates + dedupedBase
+    }
+
+    /// Kiwi: サジェスト（前方一致履歴＋準備済み LLM 補正）の結合リスト（surface で dedup）。
+    /// 入力中の候補ウィンドウ表示と、下キーのサジェスト選択の両方で同じ内容を使う。
+    private var suggestionLeadCandidates: [Candidate] {
+        let llmCandidates = self.llmRevisedTarget == self.convertTarget ? self.llmRevisedCandidates : []
+        var seen = Set<String>()
+        return (self.suggestionHistoryCandidates + llmCandidates).filter { seen.insert($0.text).inserted }
+    }
+
+    private var baseRawCandidatesList: [Candidate]? {
         guard let rawCandidates else {
             return nil
         }
@@ -509,9 +677,14 @@ public final class SegmentsManager {
             self.backspaceTypoCorrectionLock = nil
         }
         self.resetAdditionalCandidates()
+        // Kiwi: 入力が変わったらサジェスト優先モードは解除（次の下キーで再度有効化される）。
+        self.preferSuggestionSelection = false
         // 不要
         if composingText.isEmpty {
             self.rawCandidates = nil
+            self.historyPredictionCandidates = []
+            self.suggestionHistoryCandidates = []
+            self.clearLLMRevision()
             self.kanaKanjiConverter.stopComposition()
             return
         }
@@ -560,6 +733,100 @@ public final class SegmentsManager {
             )
         )
         self.rawCandidates = result
+        self.updateHistoryPredictionCandidates(leftSideContext: leftSideContext)
+        self.scheduleLLMRevision(leftSideContext: leftSideContext)
+    }
+
+    /// Kiwi: LLM 補正（NT-831）をデバウンス起動する。
+    ///
+    /// メインスレッドをブロックしないよう、辞書候補を先に確定表示したうえで、
+    /// バックグラウンド（actor）で `LLMReviser.revise` を実行する。結果が揃ったら
+    /// `llmRevisedCandidates` に格納し、次のスナップショットで候補列へ反映する。
+    /// - 設定 OFF・読みが空・読みが変化した場合はキャンセル/破棄する。
+    /// - キャンセル確定などの誤変換学習防止は履歴側と同様、確定処理側で行う（ここは表示のみ）。
+    /// Kiwi: LLM 補正の状態を破棄し、進行中のデバウンス/推論をキャンセルする。
+    @MainActor private func clearLLMRevision() {
+        self.llmRevisionTask?.cancel()
+        self.llmRevisionTask = nil
+        self.llmRevisedCandidates = []
+        self.llmRevisedTarget = ""
+    }
+
+    /// Kiwi: 進行中の LLM 補正タスク（デバウンス＋推論）の完了を待つ。
+    /// Client の `awaitLLMPrediction` 命令から呼ばれ、完了後の snapshot に LLM 候補を載せる。
+    @MainActor public func awaitPendingLLMRevision() async {
+        await self.llmRevisionTask?.value
+    }
+
+    @MainActor private func scheduleLLMRevision(leftSideContext: String?) {
+        guard Config.KiwiLLMReviserEnabled().value, let llmReviser = self.llmReviser else {
+            self.llmRevisedCandidates = []
+            self.llmRevisedTarget = ""
+            return
+        }
+        let target = self.convertTarget
+        guard target.count >= 2 else {
+            self.llmRevisedCandidates = []
+            self.llmRevisedTarget = ""
+            return
+        }
+        // 読みが変わったら前回の補正結果は無効。
+        if target != self.llmRevisedTarget {
+            self.llmRevisedCandidates = []
+        }
+        let inputCount = self.composingText.input.count
+        let ruby = target.toKatakana()
+        // 既存の辞書候補（表記）を LLM に渡してリランク・補正の材料にする。
+        let existing = Array((self.baseRawCandidatesList ?? []).prefix(8).map(\.text))
+        let context = leftSideContext
+
+        // 打鍵ごとに呼ばれるため、MainActor 隔離タスクを張り替えてデバウンスする
+        // （前回の待機/推論はキャンセル）。closure は MainActor 隔離なので self を安全に触れる。
+        self.llmRevisionTask?.cancel()
+        self.llmRevisionTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(Self.llmRevisionDebounceMilliseconds))
+            } catch {
+                return // デバウンス中にキャンセルされた
+            }
+            let revised: [LLMRevisedCandidate]
+            do {
+                revised = try await llmReviser.revise(
+                    reading: target,
+                    leftContext: context,
+                    existingCandidates: existing,
+                    maxResults: 3
+                )
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            // 実行中に読みが変わっていたら破棄（古い結果で上書きしない）。
+            guard self.convertTarget == target else { return }
+            // 候補一覧をブラウズ中（選択中）は反映しない。開いている一覧が途中で変化して
+            // 選択が飛ぶのを防ぐ（ユーザー報告「選択しようとすると別の候補が出る」の再発防止）。
+            guard self.selectionIndex == nil else { return }
+            let existingSurfaces = Set(existing)
+            self.llmRevisedCandidates = revised
+                .map(\.surface)
+                .filter { !$0.isEmpty && !existingSurfaces.contains($0) }
+                .map { surface in
+                    Candidate(
+                        text: surface,
+                        value: 0,
+                        composingCount: .inputCount(inputCount),
+                        lastMid: MIDData.一般.mid,
+                        data: [DicdataElement(
+                            word: surface,
+                            ruby: ruby,
+                            cid: CIDData.固有名詞.cid,
+                            mid: MIDData.一般.mid,
+                            value: 0
+                        )]
+                    )
+                }
+            self.llmRevisedTarget = target
+        }
     }
 
     @MainActor public func update(requestRichCandidates: Bool) {
@@ -571,6 +838,8 @@ public final class SegmentsManager {
     @MainActor public func prefixCandidateCommited(_ candidate: Candidate, leftSideContext: String) {
         self.kanaKanjiConverter.setCompletedData(candidate)
         self.kanaKanjiConverter.updateLearningData(candidate)
+        // Kiwi: 確定した「読み→表記」を履歴に保存する（予測変換の基盤）。
+        self.recordHistoryIfNeeded(candidate, leftSideContext: leftSideContext)
         self.composingText.prefixComplete(composingCount: candidate.composingCount)
 
         if !self.composingText.isEmpty {
@@ -591,6 +860,10 @@ public final class SegmentsManager {
 
     public func requestSetCandidateWindowState(visible: Bool) {
         self.shouldShowCandidateWindow = visible
+        if !visible {
+            // Kiwi: 候補ウィンドウを閉じたらサジェスト優先モードも解除する。
+            self.preferSuggestionSelection = false
+        }
     }
 
     public func requestDebugWindowMode(enabled: Bool) {
@@ -666,6 +939,14 @@ public final class SegmentsManager {
         case .none, .previewing, .replaceSuggestion, .attachDiacritic, .unicodeInput:
             return .hidden
         case .composing:
+            // Kiwi: サジェストがあれば入力中から候補ウィンドウに全候補（サジェスト＋変換候補）を
+            // 表示する（「最初から全部出す」）。選択は無し（下キーで先頭サジェストに入る）。
+            let suggestions = self.suggestionLeadCandidates
+            if !suggestions.isEmpty, !self.didExperienceSegmentEdition {
+                let base = self.baseRawCandidatesList ?? []
+                let seen = Set(suggestions.map(\.text))
+                return .composing(suggestions + base.filter { !seen.contains($0.text) }, selectionIndex: nil)
+            }
             if !self.liveConversionEnabled, let firstCandidate = self.rawCandidates?.mainResults.first {
                 return .composing([firstCandidate], selectionIndex: 0)
             } else {
@@ -865,34 +1146,71 @@ public final class SegmentsManager {
     }
 
     public func requestPredictionCandidates() -> [PredictionCandidate] {
-        guard Config.DebugPredictiveTyping().value else {
-            return []
-        }
-
         let target = self.composingText.convertTarget
         guard !target.isEmpty else {
             return []
         }
 
-        guard let rawCandidates else {
+        var results: [PredictionCandidate] = []
+
+        // Kiwi: 確定履歴からの予測。スペースで変換する前に、学習した語を予測バーに提示する。
+        // `DebugPredictiveTyping` とは独立に、`KiwiHistoryEnabled` のみで有効化される。
+        results.append(contentsOf: self.historyPredictionBarCandidates(target: target))
+
+        // Kiwi: LLM 補正（NT-831）。非同期で用意済みの補正候補を、履歴の後に予測バーへ併記する。
+        // 反映は Client の `awaitLLMPrediction` 命令（推論完了を待って snapshot 再取得）による。
+        results.append(contentsOf: self.llmPredictionBarCandidates(target: target))
+
+        // 既存: 読み補完予測（開発中機能）。読みが今より長い語を補完サジェストする。
+        if Config.DebugPredictiveTyping().value, let rawCandidates {
+            for candidate in rawCandidates.predictionResults {
+                let reading = candidateReading(candidate)
+                guard !reading.isEmpty else {
+                    continue
+                }
+                if let predictionCandidate = Self.makePredictionCandidate(
+                    currentTarget: target,
+                    candidateReading: reading,
+                    displayText: candidate.text
+                ) {
+                    results.append(predictionCandidate)
+                    break
+                }
+            }
+        }
+
+        // surface の重複を除去（履歴予測を優先）。
+        var seen = Set<String>()
+        return results.filter { seen.insert($0.displayText).inserted }
+    }
+
+    /// Kiwi: 予測バー用に、現在の読みと完全一致する確定履歴を予測候補へ変換する。
+    /// 確定時は `commitsSurfaceDirectly` により surface を直接確定する。
+    private func historyPredictionBarCandidates(target: String) -> [PredictionCandidate] {
+        guard Config.KiwiHistoryEnabled().value, let historyManager, target.count >= 2 else {
             return []
         }
+        let leftSideContext = self.getCleanLeftSideContext(maxCount: ContextLength.conversion)
+        // 前方一致（predict は reading LIKE 'target%'）。数文字打てば長い定型句・学習語が出る。
+        // 確定は surface 直挿入（commitsSurfaceDirectly）なので読み長のズレは問題にならない。
+        return historyManager
+            .predict(reading: target, leftContext: leftSideContext, limit: 5)
+            .filter { !$0.surface.isEmpty }
+            .map { PredictionCandidate(displayText: $0.surface, appendText: "", deleteCount: 0, commitsSurfaceDirectly: true) }
+    }
 
-        for candidate in rawCandidates.predictionResults {
-            let reading = candidateReading(candidate)
-            guard !reading.isEmpty else {
-                continue
-            }
-            if let predictionCandidate = Self.makePredictionCandidate(
-                currentTarget: target,
-                candidateReading: reading,
-                displayText: candidate.text
-            ) {
-                return [predictionCandidate]
-            }
+    /// Kiwi: 予測バー用に、非同期で用意済みの LLM 補正候補を予測候補へ変換する。
+    /// 読みが現在の対象と一致するときのみ有効。確定は surface 直挿入（`commitsSurfaceDirectly`）。
+    private func llmPredictionBarCandidates(target: String) -> [PredictionCandidate] {
+        guard Config.KiwiLLMReviserEnabled().value,
+              self.llmRevisedTarget == target,
+              !self.llmRevisedCandidates.isEmpty else {
+            return []
         }
-
-        return []
+        return self.llmRevisedCandidates
+            .map(\.text)
+            .filter { !$0.isEmpty }
+            .map { PredictionCandidate(displayText: $0, appendText: "", deleteCount: 0, commitsSurfaceDirectly: true) }
     }
 
     static func makePredictionCandidate(

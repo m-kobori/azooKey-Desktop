@@ -18,6 +18,8 @@ struct ConfigWindow: View {
     @ConfigState private var userDictionary = Config.UserDictionary()
     @ConfigState private var systemUserDictionary = Config.SystemUserDictionary()
     @ConfigState private var aiBackend = Config.AIBackendPreference()
+    @ConfigState private var kiwiHistoryEnabled = Config.KiwiHistoryEnabled()
+    @ConfigState private var kiwiLLMReviserEnabled = Config.KiwiLLMReviserEnabled()
 
     @State private var converterServerClient = ConverterServerClient()
     @State private var converterSettingDescriptors: [String: ConverterSettingDescriptor] = [:]
@@ -872,6 +874,28 @@ struct ConfigWindow: View {
                 }
             } header: {
                 Label("Zenzai設定", systemImage: "cpu")
+            }
+
+            Section {
+                Toggle("変換履歴を保存（予測変換の基盤）", isOn: $kiwiHistoryEnabled)
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("LLMによる候補補正を有効化", isOn: $kiwiLLMReviserEnabled)
+                        .onChange(of: kiwiLLMReviserEnabled.value) { enabled in
+                            // トグルだけで効くよう、有効化時にバックエンド未選択なら Foundation Models を選ぶ。
+                            guard enabled, aiBackend.value == .off else { return }
+                            let availability = foundationModelsAvailability ?? FoundationModelsClientCompat.checkAvailability()
+                            foundationModelsAvailability = availability
+                            if availability.isAvailable {
+                                aiBackend.value = .foundationModels
+                                Config.set(true, forKey: "hasSetAIBackendManually")
+                            }
+                        }
+                    Text("確定前の候補をローカルLLM（Foundation Models）で補正・並び替えします。使用するAIバックエンドは「基本」タブの「いい感じ変換」設定と共通です。文脈はサニタイズされ、ネットワークには送信しません（OpenAIを選んだ場合を除く）。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("Kiwi", systemImage: "sparkles")
             }
 
             Section {

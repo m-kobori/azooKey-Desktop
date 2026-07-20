@@ -62,6 +62,15 @@ extension ConverterServer {
             )
         }
 
+        // Kiwi: composing 中の下キーで開く一覧は「サジェスト選択」。予測バーに出ている
+        // 前方一致履歴・LLM 候補を一覧の先頭に差し込み、矢印/マウスでそのまま選べるようにする。
+        // スペース変換（同じ .enterCandidateSelectionMode）とはここで区別する。
+        // perform() 内の update() がフラグをクリアするため、設定は perform 後に行う。
+        if request.inputState.inputState == .composing,
+           case .navigation(let direction) = userAction, direction == .down {
+            session.manager.requestSuggestionSelectionPreference()
+        }
+
         let nextInputState = apply(
             clientActionCallback,
             currentInputState: request.inputState.inputState,
@@ -175,7 +184,7 @@ extension ConverterServer {
             manager.insertAtCursorPosition("つづき", inputStyle: inputStyle)
             effects.append(.requestReplaceSuggestion)
         case .acceptPredictionCandidate:
-            acceptPredictionCandidate(manager: manager, leftSideContext: leftSideContext)
+            acceptPredictionCandidate(manager: manager, leftSideContext: leftSideContext, effects: &effects)
         case .requestReplaceSuggestion:
             session.clearReplaceSuggestions()
             effects.append(.requestReplaceSuggestion)
@@ -329,7 +338,11 @@ extension ConverterServer {
     }
 
     @MainActor
-    func acceptPredictionCandidate(manager: SegmentsManager, leftSideContext _: String?) {
+    func acceptPredictionCandidate(
+        manager: SegmentsManager,
+        leftSideContext _: String?,
+        effects: inout [ConverterClientEffect]
+    ) {
         let prediction = SegmentsManager.preferredPredictionCandidates(
             typoCorrectionCandidates: manager.requestTypoCorrectionPredictionCandidates(),
             predictionCandidates: manager.requestPredictionCandidates()
@@ -337,6 +350,14 @@ extension ConverterServer {
         guard let prediction else {
             return
         }
+        // Kiwi: 履歴予測は displayText に surface を持つため、読みを追記せず直接確定する
+        // （スペースで変換する前に、学習した語をそのまま入力できる）。
+        if prediction.commitsSurfaceDirectly {
+            effects.append(.insertText(prediction.displayText))
+            manager.stopComposition()
+            return
+        }
+        // 既存: 読み補完予測は読み（appendText）を追記して composing を継続する。
         if prediction.deleteCount > 0 {
             manager.deleteBackwardFromCursorPosition(count: prediction.deleteCount)
         }

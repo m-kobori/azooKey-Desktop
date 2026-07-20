@@ -104,6 +104,13 @@ public enum ConverterCompositionCommand: Codable, Sendable {
 
     /// 現在の marked text を確定し、必要なら `insertText` effect を返す。
     case commit(inputState: ConverterInputState)
+
+    /// Kiwi: 進行中の LLM 補正（`LLMReviser`）の完了を待ってから snapshot を返す。
+    ///
+    /// キー処理は LLM をブロックしないため、Client は composing 中にこの命令を
+    /// 非同期発火する。Server は推論完了まで await し、`predictionCandidates` に
+    /// LLM 候補を含めた snapshot を返す。完了時に Client が予測バーを更新する。
+    case awaitLLMPrediction(inputState: ConverterInputState)
 }
 
 /// 通常の変換候補ウィンドウに対する操作。

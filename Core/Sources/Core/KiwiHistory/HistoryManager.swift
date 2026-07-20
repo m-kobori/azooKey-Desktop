@@ -87,6 +87,10 @@ public final class HistoryManager: @unchecked Sendable {
         at date: Date = Date()
     ) {
         guard !reading.isEmpty, !surface.isEmpty else { return }
+        // Kiwi: パスワード等の機密らしき文字列は保存しない（全書き込みの単一チェックポイント）。
+        guard !HistoryPrivacyFilter.isSensitiveText(reading), !HistoryPrivacyFilter.isSensitiveText(surface) else {
+            return
+        }
         do {
             try dbQueue.write { db in
                 if var existing = try HistoryEntry
@@ -271,14 +275,45 @@ public final class HistoryManager: @unchecked Sendable {
     }
 
     /// 全履歴を削除する（設定画面からのクリア用）。
+    /// シード投入バージョンもリセットするため、次回起動時に定型句シードが再投入される。
     public func clear() {
         do {
             try dbQueue.write { db in
                 _ = try HistoryEntry.deleteAll(db)
+                try db.execute(sql: "DELETE FROM meta WHERE key = ?", arguments: [Self.seedVersionKey])
             }
         } catch {
             self.logger?("HistoryManager.clear failed: \(error)")
         }
+    }
+
+    /// 機密らしき既存エントリを遡及削除する（`HistoryPrivacyFilter` 導入以前に
+    /// 記録されてしまったパスワード等の掃除。起動時に呼ぶ）。
+    public func deleteSensitiveEntries() {
+        do {
+            try dbQueue.write { db in
+                let entries = try HistoryEntry.fetchAll(db)
+                for entry in entries
+                where HistoryPrivacyFilter.isSensitiveText(entry.reading) || HistoryPrivacyFilter.isSensitiveText(entry.surface) {
+                    _ = try entry.delete(db)
+                }
+            }
+        } catch {
+            self.logger?("HistoryManager.deleteSensitiveEntries failed: \(error)")
+        }
+    }
+
+    /// 既定の履歴 DB パス（App Group コンテナ、無ければアプリサポートディレクトリ配下）。
+    /// ConverterServer 側（`SegmentsManager.makeHistoryManager`）と設定画面で同じ場所を指す。
+    public static func defaultDatabaseURL() -> URL {
+        if let containerURL = AppGroup.containerURL() {
+            return containerURL
+                .appendingPathComponent("Library/Application Support/KiwiHistory", isDirectory: true)
+                .appendingPathComponent("history.sqlite", isDirectory: false)
+        }
+        return AppGroup.applicationSupportDirectoryURL()
+            .appendingPathComponent("KiwiHistory", isDirectory: true)
+            .appendingPathComponent("history.sqlite", isDirectory: false)
     }
 
     // MARK: - Helpers

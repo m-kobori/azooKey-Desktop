@@ -37,6 +37,8 @@ struct ConfigWindow: View {
     @State private var systemUserDictionaryUpdateMessage: SystemUserDictionaryUpdateMessage?
     @State private var showingLearningResetConfirmation = false
     @State private var learningResetMessage: LearningResetMessage?
+    @State private var showingKiwiHistoryClearConfirmation = false
+    @State private var kiwiHistoryClearMessage: String?
     @State private var foundationModelsAvailability: FoundationModelsAvailability?
     @State private var availabilityCheckDone = false
     @State private var debugTypoCorrectionState: DebugTypoCorrectionState = .notDownloaded
@@ -336,6 +338,22 @@ struct ConfigWindow: View {
     }
 
     @MainActor
+    /// Kiwi: 変換履歴 DB（学習した語句・サジェスト）を全削除する。
+    /// DB は ConverterServer と共有の SQLite ファイル。GRDB のシリアルアクセスにより
+    /// 別プロセスからの clear も安全に実行できる。シードは次回起動時に再投入される。
+    private func clearKiwiHistory() {
+        do {
+            let manager = try HistoryManager(databaseURL: HistoryManager.defaultDatabaseURL())
+            manager.clear()
+            kiwiHistoryClearMessage = "変換履歴を削除しました"
+        } catch {
+            kiwiHistoryClearMessage = "削除に失敗しました: \(error.localizedDescription)"
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            kiwiHistoryClearMessage = nil
+        }
+    }
+
     private func resetLearningData() {
         guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
             learningResetMessage = .error("学習データのリセットに失敗しました")
@@ -880,6 +898,30 @@ struct ConfigWindow: View {
 
             Section {
                 Toggle("変換履歴を保存（予測変換の基盤）", isOn: $kiwiHistoryEnabled)
+                LabeledContent {
+                    HStack {
+                        if let message = kiwiHistoryClearMessage {
+                            Text(message)
+                                .foregroundColor(.green)
+                        }
+                        Spacer()
+                        Button("すべて削除") {
+                            showingKiwiHistoryClearConfirmation = true
+                        }
+                        .confirmationDialog(
+                            "Kiwiの変換履歴（学習した語句・サジェスト）をすべて削除しますか？定型句シードは次回再投入されます。",
+                            isPresented: $showingKiwiHistoryClearConfirmation,
+                            titleVisibility: .visible
+                        ) {
+                            Button("削除", role: .destructive) {
+                                clearKiwiHistory()
+                            }
+                            Button("キャンセル", role: .cancel) {}
+                        }
+                    }
+                } label: {
+                    Text("変換履歴データ")
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("辞書による予測変換をサジェストに含める", isOn: $kiwiDictionaryPredictionEnabled)
                     Text("読みの途中から辞書の語彙を補完します（例:「あり」→「ありがとう」）。スマホIMEの予測変換に相当します。")

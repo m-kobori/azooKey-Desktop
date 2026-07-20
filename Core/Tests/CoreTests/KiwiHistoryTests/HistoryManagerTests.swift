@@ -69,6 +69,48 @@ private func makeTemporaryManager() throws -> (HistoryManager, URL) {
     #expect(manager.count() == 0)
 }
 
+@Test func sensitiveTextDetection() {
+    // パスワードらしい文字列は弾く
+    #expect(HistoryPrivacyFilter.isSensitiveText("Passw0rd!"))
+    #expect(HistoryPrivacyFilter.isSensitiveText("hunter2hunter2!"))
+    #expect(HistoryPrivacyFilter.isSensitiveText("abc12345"))
+    #expect(HistoryPrivacyFilter.isSensitiveText("123456"))       // PIN
+    #expect(HistoryPrivacyFilter.isSensitiveText("4111111111111111")) // カード番号様
+    #expect(HistoryPrivacyFilter.isSensitiveText("sk-abcDEF123xyz")) // APIキー様
+    // 通常の語句は通す
+    #expect(!HistoryPrivacyFilter.isSensitiveText("hello"))
+    #expect(!HistoryPrivacyFilter.isSensitiveText("thank you for your reply"))
+    #expect(!HistoryPrivacyFilter.isSensitiveText("Best regards,")) // 空白あり
+    #expect(!HistoryPrivacyFilter.isSensitiveText("よろしくお願いします"))
+    #expect(!HistoryPrivacyFilter.isSensitiveText("ご確認ください"))
+    #expect(!HistoryPrivacyFilter.isSensitiveText("internationalization")) // 長い単語（1文字種）
+}
+
+@Test func recordRejectsSensitiveText() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "Passw0rd!", surface: "Passw0rd!", leftContext: "")
+    manager.record(reading: "123456", surface: "123456", leftContext: "")
+    #expect(manager.count() == 0)
+
+    manager.record(reading: "hello", surface: "hello", leftContext: "")
+    #expect(manager.count() == 1)
+}
+
+@Test func deleteSensitiveEntriesCleansExistingRows() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    // フィルタ導入以前に保存されてしまった想定で、シード API 経由で直接投入
+    manager.seedIfNeeded([("Passw0rd!", "Passw0rd!"), ("hello", "hello")], version: 1, source: "ime")
+    #expect(manager.count() == 2)
+
+    manager.deleteSensitiveEntries()
+    #expect(manager.count() == 1)
+    #expect(manager.predict(reading: "he", leftContext: "", limit: 5).first?.surface == "hello")
+}
+
 @Test func seedDataHasNoDuplicatesAndValidEntries() {
     let entries = HistorySeedData.entries
     // (reading, surface) の重複なし（ユニーク制約で黙って落ちるのを防ぐ）

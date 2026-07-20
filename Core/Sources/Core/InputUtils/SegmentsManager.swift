@@ -141,9 +141,11 @@ public final class SegmentsManager {
             // コールドスタート回避: シード未投入なら定型句を初期投入する（実利用の学習が貯まれば上書きされる）。
             manager.seedIfNeeded(HistorySeedData.entries)
             // 1日1回の頻度減衰: 最近使わない語の優先度を徐々に下げ、不要行を削除する。
+            // 機密らしき既存エントリ（過去に保存されたパスワード等）の遡及削除もあわせて行う。
             // メインスレッドをブロックしないようバックグラウンドで実行する。
             Task.detached(priority: .utility) {
                 manager.decayDailyIfNeeded()
+                manager.deleteSensitiveEntries()
             }
             return manager
         } catch {

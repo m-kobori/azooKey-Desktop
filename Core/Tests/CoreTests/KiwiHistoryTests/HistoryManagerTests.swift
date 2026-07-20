@@ -69,6 +69,29 @@ private func makeTemporaryManager() throws -> (HistoryManager, URL) {
     #expect(manager.count() == 0)
 }
 
+@Test func decayDailyRunsOncePerDay() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "てすと", surface: "テスト", leftContext: "")
+    manager.record(reading: "てすと", surface: "テスト", leftContext: "")
+    // frequency = 2.0
+
+    let day1 = Date(timeIntervalSince1970: 1_700_000_000)
+    // 同じ日に何度呼んでも減衰は 1 回だけ
+    manager.decayDailyIfNeeded(now: day1, factor: 0.5)
+    manager.decayDailyIfNeeded(now: day1, factor: 0.5)
+    // score = frequency * (1 + similarity)。空文脈同士は similarity = 1 なので score = freq * 2。
+    var candidates = manager.predict(reading: "てすと", leftContext: "", limit: 1)
+    #expect(candidates.first?.score == 2.0) // freq: 2.0 → 1.0（1回だけ減衰）
+
+    // 翌日はもう 1 回減衰する
+    let day2 = day1.addingTimeInterval(60 * 60 * 24)
+    manager.decayDailyIfNeeded(now: day2, factor: 0.5)
+    candidates = manager.predict(reading: "てすと", leftContext: "", limit: 1)
+    #expect(candidates.first?.score == 1.0) // freq: 1.0 → 0.5
+}
+
 @Test func emptyInputsAreIgnored() throws {
     let (manager, directory) = try makeTemporaryManager()
     defer { try? FileManager.default.removeItem(at: directory) }

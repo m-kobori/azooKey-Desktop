@@ -3,10 +3,11 @@ import Foundation
 import Testing
 
 /// 呼び出し回数を数え、固定応答を返すモックバックエンド。
+/// NSLock は async 文脈で使用不可のため、カウンタは直列キューで保護する。
 private final class MockBackend: LLMRevisionBackend, @unchecked Sendable {
     let response: String
     let available: Bool
-    private let lock = NSLock()
+    private let countQueue = DispatchQueue(label: "MockBackend.callCount")
     private var _callCount = 0
 
     init(response: String, available: Bool = true) {
@@ -17,12 +18,11 @@ private final class MockBackend: LLMRevisionBackend, @unchecked Sendable {
     var isAvailable: Bool { self.available }
 
     var callCount: Int {
-        self.lock.lock(); defer { self.lock.unlock() }
-        return self._callCount
+        self.countQueue.sync { self._callCount }
     }
 
     func generate(prompt: String) async throws -> String {
-        self.lock.lock(); self._callCount += 1; self.lock.unlock()
+        self.countQueue.sync { self._callCount += 1 }
         return self.response
     }
 }

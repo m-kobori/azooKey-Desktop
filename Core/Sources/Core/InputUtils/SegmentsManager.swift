@@ -120,6 +120,11 @@ public final class SegmentsManager {
             }
             // コールドスタート回避: シード未投入なら定型句を初期投入する（実利用の学習が貯まれば上書きされる）。
             manager.seedIfNeeded(HistorySeedData.entries)
+            // 1日1回の頻度減衰: 最近使わない語の優先度を徐々に下げ、不要行を削除する。
+            // メインスレッドをブロックしないようバックグラウンドで実行する。
+            Task.detached(priority: .utility) {
+                manager.decayDailyIfNeeded()
+            }
             return manager
         } catch {
             self.appendDebugMessage("❌ KiwiHistory: 初期化に失敗しました: \(error)")

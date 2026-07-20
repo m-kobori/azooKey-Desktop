@@ -62,6 +62,13 @@ public final class HistoryManager: @unchecked Sendable {
                 ifNotExists: true
             )
         }
+        // 減衰の最終実行日などのメタ情報（key-value）。
+        migrator.registerMigration("createMeta") { db in
+            try db.create(table: "meta", ifNotExists: true) { t in
+                t.column("key", .text).primaryKey()
+                t.column("value", .text).notNull()
+            }
+        }
         try migrator.migrate(dbQueue)
     }
 
@@ -124,15 +131,23 @@ public final class HistoryManager: @unchecked Sendable {
             }
             let context = leftContext ?? ""
             let ranked = entries
-                .map { entry -> HistoryCandidate in
+                .map { entry -> (candidate: HistoryCandidate, similarity: Double) in
                     let similarity = Self.contextSimilarity(context, entry.leftContext)
-                    return HistoryCandidate(
+                    let candidate = HistoryCandidate(
                         reading: entry.reading,
                         surface: entry.surface,
                         score: entry.frequency * (1.0 + similarity)
                     )
+                    return (candidate, similarity)
                 }
-                .sorted { $0.score > $1.score }
+                // スコア同点は文脈類似が高い方を優先（sorted は安定ソートでないため明示的に決める）。
+                .sorted {
+                    if $0.candidate.score != $1.candidate.score {
+                        return $0.candidate.score > $1.candidate.score
+                    }
+                    return $0.similarity > $1.similarity
+                }
+                .map(\.candidate)
             return Array(ranked.prefix(limit))
         } catch {
             self.logger?("HistoryManager.predict failed: \(error)")
@@ -153,6 +168,42 @@ public final class HistoryManager: @unchecked Sendable {
             }
         } catch {
             self.logger?("HistoryManager.decayAll failed: \(error)")
+        }
+    }
+
+    /// meta テーブルの最終減衰日キー。
+    private static let lastDecayDateKey = "lastDecayDate"
+
+    /// 1日1回だけ `decayAll` を実行する。
+    ///
+    /// 最終実行日（ローカルタイムゾーンの暦日 "yyyy-MM-dd"）を DB 内 meta テーブルに保持し、
+    /// 日付が変わっていた場合のみ減衰する。判定と減衰を同一トランザクションで行うため、
+    /// 複数プロセス/スレッドから同時に呼ばれても二重減衰しない。起動時などに呼ぶ。
+    public func decayDailyIfNeeded(now: Date = Date(), factor: Double = 0.9) {
+        guard factor > 0, factor < 1 else { return }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: now)
+        do {
+            try dbQueue.write { db in
+                let last = try String.fetchOne(
+                    db,
+                    sql: "SELECT value FROM meta WHERE key = ?",
+                    arguments: [Self.lastDecayDateKey]
+                )
+                guard last != today else { return }
+                try db.execute(sql: "UPDATE history SET frequency = frequency * ?", arguments: [factor])
+                try db.execute(sql: "DELETE FROM history WHERE frequency < ?", arguments: [Self.minimumFrequency])
+                try db.execute(
+                    sql: "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    arguments: [Self.lastDecayDateKey, today]
+                )
+            }
+        } catch {
+            self.logger?("HistoryManager.decayDailyIfNeeded failed: \(error)")
         }
     }
 

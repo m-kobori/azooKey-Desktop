@@ -1,0 +1,94 @@
+@testable import Core
+import Foundation
+import Testing
+
+private func makeTemporaryManager() throws -> (HistoryManager, URL) {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .appendingPathComponent("KiwiHistoryTests-\(UUID().uuidString)", isDirectory: true)
+    let url = directory.appendingPathComponent("history.sqlite", isDirectory: false)
+    let manager = try HistoryManager(databaseURL: url)
+    return (manager, directory)
+}
+
+@Test func recordAndPredictReturnsMostFrequent() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "きょう", surface: "今日", leftContext: "")
+    manager.record(reading: "きょう", surface: "今日", leftContext: "")
+    manager.record(reading: "きょう", surface: "教養", leftContext: "")
+
+    let candidates = manager.predict(reading: "きょう", leftContext: "", limit: 5)
+    #expect(candidates.first?.surface == "今日")
+    #expect(candidates.contains { $0.surface == "教養" })
+}
+
+@Test func recordAccumulatesFrequencyForSamePair() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "きょう", surface: "今日", leftContext: "")
+    manager.record(reading: "きょう", surface: "今日", leftContext: "")
+    manager.record(reading: "きょう", surface: "今日", leftContext: "")
+
+    // 同一 (reading, surface) は加算更新されるため 1 レコードのみ
+    #expect(manager.count() == 1)
+}
+
+@Test func predictUsesPrefixMatch() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "きょうと", surface: "京都", leftContext: "")
+    let candidates = manager.predict(reading: "きょう", leftContext: "", limit: 5)
+    #expect(candidates.contains { $0.surface == "京都" })
+}
+
+@Test func predictPrefersSimilarLeftContext() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    // 頻度は「東京」が上だが、文脈が一致する「今日」を優先させたい
+    manager.record(reading: "きょう", surface: "京", leftContext: "旅行で")
+    manager.record(reading: "きょう", surface: "京", leftContext: "旅行で")
+    manager.record(reading: "きょう", surface: "今日", leftContext: "会議は")
+
+    let candidates = manager.predict(reading: "きょう", leftContext: "会議は", limit: 5)
+    #expect(candidates.first?.surface == "今日")
+}
+
+@Test func decayReducesFrequencyAndPrunes() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "てすと", surface: "テスト", leftContext: "")
+    // 1.0 から十分に減衰させると閾値以下になり削除される
+    for _ in 0 ..< 40 {
+        manager.decayAll(by: 0.9)
+    }
+    #expect(manager.count() == 0)
+}
+
+@Test func emptyInputsAreIgnored() throws {
+    let (manager, directory) = try makeTemporaryManager()
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    manager.record(reading: "", surface: "今日", leftContext: "")
+    manager.record(reading: "きょう", surface: "", leftContext: "")
+    #expect(manager.count() == 0)
+    #expect(manager.predict(reading: "", leftContext: nil, limit: 5).isEmpty)
+}
+
+@Test func contextSimilarityBounds() {
+    #expect(HistoryManager.contextSimilarity("", "") == 1.0)
+    #expect(HistoryManager.contextSimilarity("あいう", "") == 0.0)
+    #expect(HistoryManager.contextSimilarity("会議は", "会議は") == 1.0)
+    let partial = HistoryManager.contextSimilarity("今日の会議は", "明日の会議は")
+    #expect(partial > 0.0 && partial < 1.0)
+}
+
+@Test func escapeLikeEscapesWildcards() {
+    #expect(HistoryManager.escapeLike("50%") == "50\\%")
+    #expect(HistoryManager.escapeLike("a_b") == "a\\_b")
+    #expect(HistoryManager.escapeLike("あ") == "あ")
+}

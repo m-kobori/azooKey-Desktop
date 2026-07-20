@@ -33,7 +33,9 @@ var targets: [Target] = [
             .product(name: "SwiftUtils", package: "AzooKeyKanaKanjiConverter"),
             .product(name: "KanaKanjiConverterModuleWithDefaultDictionary", package: "AzooKeyKanaKanjiConverter"),
             .product(name: "Crypto", package: "swift-crypto"),
-            .product(name: "ZIPFoundation", package: "ZIPFoundation")
+            .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            // Kiwi: 履歴保存（SQLite）用。ConverterServer プロセス側で利用する。
+            .product(name: "GRDB", package: "GRDB.swift")
         ],
         swiftSettings: [.interoperabilityMode(.Cxx)],
         plugins: [
@@ -70,7 +72,9 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/azooKey/AzooKeyKanaKanjiConverter", revision: "bbef9d2d99a2e9e69ac3f7e2e07b08474de59a81", traits: kanaKanjiConverterTraits),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
-        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.0")
+        .package(url: "https://github.com/weichsel/ZIPFoundation.git", from: "0.9.0"),
+        // Kiwi: 履歴保存（SQLite）用の型安全な SQLite ラッパー
+        .package(url: "https://github.com/groue/GRDB.swift", from: "6.0.0")
     ],
     targets: targets
 )

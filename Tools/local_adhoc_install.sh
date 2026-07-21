@@ -9,10 +9,22 @@
 #
 # 使い方:  ./Tools/local_adhoc_install.sh
 #   --skip-build   既存の build/archive.xcarchive を再利用（署名とインストールのみ）
+#   --user         ~/Library/Input Methods へインストール（sudo 不要・管理者権限なしでも可）
+#   --package      インストールせず dist/Kiwi-transfer.zip を作成（他の Mac への持ち込み用。
+#                  対象 Mac では zip 展開後 install_on_target.sh を実行。管理者権限・Xcode 不要）
 set -euo pipefail
 
 SKIP_BUILD=false
-[ "${1:-}" = "--skip-build" ] && SKIP_BUILD=true
+USER_INSTALL=false
+MAKE_PACKAGE=false
+for arg in "$@"; do
+    case "${arg}" in
+        --skip-build) SKIP_BUILD=true ;;
+        --user) USER_INSTALL=true ;;
+        --package) MAKE_PACKAGE=true ;;
+        *) echo "unknown option: ${arg}" >&2; exit 1 ;;
+    esac
+done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
@@ -20,7 +32,11 @@ cd "${REPO_ROOT}"
 BUNDLE_ID="dev.ensan.inputmethod.azooKeyMac"
 ARCHIVE="build/archive.xcarchive"
 APP="${ARCHIVE}/Products/Applications/azooKeyMac.app"
-INSTALL_APP_PATH="/Library/Input Methods/azooKeyMac.app"
+if [ "${USER_INSTALL}" = true ]; then
+    INSTALL_APP_PATH="${HOME}/Library/Input Methods/azooKeyMac.app"
+else
+    INSTALL_APP_PATH="/Library/Input Methods/azooKeyMac.app"
+fi
 TMP_ENT="$(mktemp -d)"
 trap 'rm -rf "${TMP_ENT}"' EXIT
 
@@ -85,10 +101,39 @@ codesign --force --sign - --entitlements "${TMP_ENT}/app.entitlements" \
 codesign --verify --deep --strict "${APP}"
 echo "==> 署名OK"
 
-# --- 4. インストール（sudo 必要）---
-echo "==> /Library/Input Methods/ へインストール（sudo）..."
-sudo rm -rf "${INSTALL_APP_PATH}"
-sudo ditto "${APP}" "${INSTALL_APP_PATH}"
+# --- 4a. パッケージ作成（--package: インストールせず配布 zip を作る）---
+if [ "${MAKE_PACKAGE}" = true ]; then
+    echo "==> 配布パッケージを作成..."
+    DIST_DIR="${REPO_ROOT}/dist/Kiwi-transfer"
+    rm -rf "${DIST_DIR}"
+    mkdir -p "${DIST_DIR}"
+    ditto "${APP}" "${DIST_DIR}/azooKeyMac.app"
+    cp "${REPO_ROOT}/Tools/install_on_target.sh" "${DIST_DIR}/"
+    chmod +x "${DIST_DIR}/install_on_target.sh"
+    (cd "${REPO_ROOT}/dist" && rm -f Kiwi-transfer.zip && ditto -c -k --keepParent Kiwi-transfer Kiwi-transfer.zip)
+    echo ""
+    echo "✅ 作成: ${REPO_ROOT}/dist/Kiwi-transfer.zip"
+    echo "対象 Mac で: unzip → cd Kiwi-transfer → ./install_on_target.sh（管理者権限・Xcode 不要）"
+    exit 0
+fi
+
+# --- 4. インストール ---
+if [ "${USER_INSTALL}" = true ]; then
+    # ユーザー単位のIME置き場。sudo 不要（管理者権限のない端末でも可）。
+    echo "==> ~/Library/Input Methods/ へインストール（sudo 不要）..."
+    if [ -d "/Library/Input Methods/azooKeyMac.app" ]; then
+        echo "⚠️  /Library/Input Methods/azooKeyMac.app（システム側）も存在します。"
+        echo "    二重登録を避けるため、可能なら管理者権限で削除してください:"
+        echo "    sudo rm -rf '/Library/Input Methods/azooKeyMac.app'"
+    fi
+    rm -rf "${INSTALL_APP_PATH}"
+    mkdir -p "$(dirname "${INSTALL_APP_PATH}")"
+    ditto "${APP}" "${INSTALL_APP_PATH}"
+else
+    echo "==> /Library/Input Methods/ へインストール（sudo）..."
+    sudo rm -rf "${INSTALL_APP_PATH}"
+    sudo ditto "${APP}" "${INSTALL_APP_PATH}"
+fi
 
 # --- 5. ConverterServer 常駐サービス登録 & 再起動 ---
 "${REPO_ROOT}/Tools/install_converter_server_launch_agent.sh" "${INSTALL_APP_PATH}"
@@ -96,4 +141,4 @@ pkill azooKeyMac || true
 
 echo ""
 echo "✅ 完了: ${INSTALL_APP_PATH}"
-echo "次: ログアウト→ログイン後、システム設定 > キーボード > 入力ソース > + > 日本語 > azooKey を追加"
+echo "次: ログアウト→ログイン後、システム設定 > キーボード > 入力ソース > + > 日本語 > Kiwi を追加"

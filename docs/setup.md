@@ -103,7 +103,21 @@ kernel は埋め込みエンタイトルメントに基づき Sandbox を適用�
 
 # 既に build/archive.xcarchive がある場合は署名+インストールのみ
 ./Tools/local_adhoc_install.sh --skip-build
+
+# 管理者権限が無い場合: ~/Library/Input Methods へユーザー単位でインストール（sudo 不要）
+./Tools/local_adhoc_install.sh --skip-build --user
+
+# 他の Mac へ配布する場合: dist/Kiwi-transfer.zip を作成（インストールはしない）
+./Tools/local_adhoc_install.sh --skip-build --package
 ```
+
+**他の Mac へのインストール（管理者権限・Xcode 不要）**: `--package` で作った
+`dist/Kiwi-transfer.zip` を対象 Mac へコピーし、展開して `./install_on_target.sh` を実行する。
+スクリプトが quarantine 除去 → `~/Library/Input Methods` へ配置 → LaunchAgent 登録まで行う
+（すべてユーザー領域なので sudo 不要）。その後ログアウト→ログインし、入力ソースに
+「Kiwi」を追加する。アドホック署名は他マシンでも有効（配布は組織内のローカル利用に限る）。
+なお同じ Mac に `/Library/Input Methods/azooKeyMac.app`（システム側）が既にある場合は
+二重登録になるため、どちらか一方に統一する。
 
 要点（スクリプト内で実施）:
 

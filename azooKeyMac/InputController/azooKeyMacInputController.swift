@@ -283,6 +283,9 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             return false
         }
 
+        // Kiwi: Caps Lock の状態と入力言語のズレを自己修復（切替イベントの取り逃し対策）。
+        self.syncCapsLockStateIfNeeded(event: event, client: client)
+
         // カスタムプロンプトショートカットのチェック
         if let matchedPrompt = checkCustomPromptShortcut(event: event) {
             let aiBackendEnabled = Config.AIBackendPreference().value != .off
@@ -583,8 +586,32 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         self.currentConverterView = response.snapshot
     }
 
+    /// Kiwi: Caps Lock 以外の手段（英数/かなキー・メニュー等）で言語が切り替えられ、
+    /// Caps の物理状態と食い違っている間 true。キー入力時の自己修復（下記）を抑止する。
+    private var capsLockManualOverride = false
+    /// Kiwi: 現在の英語モードが Caps Lock によって入ったものか（OFF 時の自己修復判定用）。
+    private var englishEnteredByCapsLock = false
+
+    /// Kiwi: Caps Lock 状態と入力言語のズレを自己修復する。
+    ///
+    /// テキスト欄にフォーカスが無いときに Caps Lock を押すと flagsChanged が IME に
+    /// 届かず、Caps の物理状態と言語がズレたままになる（「たまに効かない」の正体）。
+    /// キー入力のたびに照合し、ズレていれば処理前に切り替える。
+    /// 英数/かなキー等での手動切替は `capsLockManualOverride` で尊重する。
+    @MainActor private func syncCapsLockStateIfNeeded(event: NSEvent, client: IMKTextInput) {
+        let capsOn = event.modifierFlags.contains(.capsLock)
+        if capsOn, self.inputLanguage == .japanese, !self.capsLockManualOverride {
+            self.applyCapsLockLanguageSwitch(toEnglish: true, client: client)
+        } else if !capsOn, self.inputLanguage == .english, self.englishEnteredByCapsLock {
+            self.applyCapsLockLanguageSwitch(toEnglish: false, client: client)
+        }
+    }
+
     /// Kiwi: Caps Lock による言語切替。composing 中なら現在の入力を確定してから切り替える。
     @MainActor private func applyCapsLockLanguageSwitch(toEnglish english: Bool, client: IMKTextInput) {
+        // Caps の状態が変わったら手動切替の上書きは解除する。
+        self.capsLockManualOverride = false
+        self.englishEnteredByCapsLock = english
         let target: InputLanguage = english ? .english : .japanese
         guard self.inputLanguage != target else { return }
         if self.inputState != .none {
@@ -602,10 +629,18 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
                 self.refreshPredictionWindow()
             }
         }
-        self.switchInputLanguage(target, client: client)
+        self.switchInputLanguage(target, client: client, viaCapsLock: true)
     }
 
-    @MainActor func switchInputLanguage(_ language: InputLanguage, client: IMKTextInput) {
+    @MainActor func switchInputLanguage(_ language: InputLanguage, client: IMKTextInput, viaCapsLock: Bool = false) {
+        if !viaCapsLock {
+            // Caps 点灯中に別手段（英数/かなキー・メニュー等）で切り替えた場合、
+            // キー入力時の自己修復（syncCapsLockStateIfNeeded）と衝突しないよう上書きを記録する。
+            if NSEvent.modifierFlags.contains(.capsLock) {
+                self.capsLockManualOverride = true
+            }
+            self.englishEnteredByCapsLock = false
+        }
         self.inputLanguage = language
         client.overrideKeyboard(withKeyboardNamed: Config.KeyboardLayout().value.layoutIdentifier)
         switch language {

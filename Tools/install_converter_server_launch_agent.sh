@@ -4,7 +4,8 @@ set -eu
 service_name="dev.ensan.inputmethod.azooKeyMac.ConverterServer"
 default_app_path="${BUILT_PRODUCTS_DIR:-/tmp/azooKeyDesktopDerivedData/Build/Products/Debug}/azooKeyMac.app"
 app_path="${1:-${default_app_path}}"
-server_path="${app_path}/Contents/MacOS/ConverterServer"
+# Kiwi: 第2引数でサーバ実行ファイルのパスを上書きできる（アプリ外配置用）。
+server_path="${2:-${app_path}/Contents/MacOS/ConverterServer}"
 agent_dir="${HOME}/Library/LaunchAgents"
 agent_path="${agent_dir}/${service_name}.plist"
 gui_domain="gui/$(id -u)"

@@ -135,8 +135,26 @@ else
     sudo ditto "${APP}" "${INSTALL_APP_PATH}"
 fi
 
-# --- 5. ConverterServer 常駐サービス登録 & 再起動 ---
-"${REPO_ROOT}/Tools/install_converter_server_launch_agent.sh" "${INSTALL_APP_PATH}"
+# --- 5. ConverterServer をアプリ外に配置 ---
+# SwiftPM の実行ファイルはリソースバンドルを「Bundle.main.bundleURL 直下」か
+# 「ビルドマシンの .build パス」でしか探さない。アプリ内 (Contents/MacOS) から起動すると
+# Bundle.main はアプリになり、バンドルルート直下は codesign 上リソースを置けないため、
+# ビルドマシン以外では辞書バンドルが見つからず crash-loop する。
+# 対策: サーバ実行ファイルを ~/Library/Application Support/Kiwi/server/ に置き、
+# 必要なバンドル・Frameworks・Resources をアプリからシンボリックリンクで並べる。
+SUPPORT_DIR="${HOME}/Library/Application Support/Kiwi"
+rm -rf "${SUPPORT_DIR}/server"
+mkdir -p "${SUPPORT_DIR}/server"
+cp "${INSTALL_APP_PATH}/Contents/MacOS/ConverterServer" "${SUPPORT_DIR}/server/"
+for bundle in "${INSTALL_APP_PATH}/Contents/Resources/"*.bundle; do
+    ln -sfn "${bundle}" "${SUPPORT_DIR}/server/$(basename "${bundle}")"
+done
+rm -f "${SUPPORT_DIR}/Frameworks" "${SUPPORT_DIR}/Resources"
+ln -s "${INSTALL_APP_PATH}/Contents/Frameworks" "${SUPPORT_DIR}/Frameworks"
+ln -s "${INSTALL_APP_PATH}/Contents/Resources" "${SUPPORT_DIR}/Resources"
+
+# --- 6. ConverterServer 常駐サービス登録 & 再起動 ---
+"${REPO_ROOT}/Tools/install_converter_server_launch_agent.sh" "${INSTALL_APP_PATH}" "${SUPPORT_DIR}/server/ConverterServer"
 pkill azooKeyMac || true
 
 echo ""

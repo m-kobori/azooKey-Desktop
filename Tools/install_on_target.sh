@@ -36,8 +36,23 @@ rm -rf "${INSTALL_APP_PATH}"
 mkdir -p "$(dirname "${INSTALL_APP_PATH}")"
 ditto "${APP_SRC}" "${INSTALL_APP_PATH}"
 
+echo "==> ConverterServer をアプリ外に配置（辞書バンドル解決のため）..."
+# SwiftPM の実行ファイルはリソースバンドルを実行ファイルの隣（Bundle.main.bundleURL 直下）
+# でしか探せないため、アプリ内から起動すると辞書が見つからず crash-loop する。
+# サーバを Application Support 配下に置き、バンドル等をシンボリックリンクで並べる。
+SUPPORT_DIR="${HOME}/Library/Application Support/Kiwi"
+rm -rf "${SUPPORT_DIR}/server"
+mkdir -p "${SUPPORT_DIR}/server"
+cp "${INSTALL_APP_PATH}/Contents/MacOS/ConverterServer" "${SUPPORT_DIR}/server/"
+for bundle in "${INSTALL_APP_PATH}/Contents/Resources/"*.bundle; do
+    ln -sfn "${bundle}" "${SUPPORT_DIR}/server/$(basename "${bundle}")"
+done
+rm -f "${SUPPORT_DIR}/Frameworks" "${SUPPORT_DIR}/Resources"
+ln -s "${INSTALL_APP_PATH}/Contents/Frameworks" "${SUPPORT_DIR}/Frameworks"
+ln -s "${INSTALL_APP_PATH}/Contents/Resources" "${SUPPORT_DIR}/Resources"
+
 echo "==> ConverterServer の LaunchAgent を登録..."
-SERVER_PATH="${INSTALL_APP_PATH}/Contents/MacOS/ConverterServer"
+SERVER_PATH="${SUPPORT_DIR}/server/ConverterServer"
 mkdir -p "$(dirname "${AGENT_PATH}")"
 cat > "${AGENT_PATH}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

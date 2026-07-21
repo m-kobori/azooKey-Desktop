@@ -22,6 +22,7 @@ struct ConfigWindow: View {
     @ConfigState private var kiwiLLMReviserEnabled = Config.KiwiLLMReviserEnabled()
     @ConfigState private var kiwiEnglishSuggestionEnabled = Config.KiwiEnglishSuggestionEnabled()
     @ConfigState private var kiwiDictionaryPredictionEnabled = Config.KiwiDictionaryPredictionEnabled()
+    @ConfigState private var kiwiTerminalSuggestionEnabled = Config.KiwiTerminalSuggestionEnabled()
 
     @State private var converterServerClient = ConverterServerClient()
     @State private var converterSettingDescriptors: [String: ConverterSettingDescriptor] = [:]
@@ -925,6 +926,12 @@ struct ConfigWindow: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Toggle("辞書による予測変換をサジェストに含める", isOn: $kiwiDictionaryPredictionEnabled)
                     Text("読みの途中から辞書の語彙を補完します（例:「あり」→「ありがとう」）。スマホIMEの予測変換に相当します。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("ターミナルでコマンド・パスをサジェスト", isOn: $kiwiTerminalSuggestionEnabled)
+                    Text("ターミナル（Terminal / iTerm2 / Ghostty 等）の英語モードで、シェル履歴（~/.zsh_history）のコマンドとファイルパスの補完をサジェストします。ターミナルでの入力は変換履歴に保存されません。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

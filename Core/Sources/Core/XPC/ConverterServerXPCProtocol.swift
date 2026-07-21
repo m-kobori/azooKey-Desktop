@@ -334,6 +334,10 @@ public struct ConverterKeyEventRequest: Codable, Sendable, Equatable {
     /// Kiwi: クライアントがパスワードマネージャー等のセンシティブなアプリのとき true。
     /// Server は履歴記録・LLM 送出を停止する（表示・変換は通常どおり）。
     public var isSensitiveClient: Bool?
+    /// Kiwi: クライアントがターミナルアプリのとき true。
+    /// Server は英語 composing でシェル履歴コマンド・パス補完をサジェストし、
+    /// 英語確定の Kiwi 履歴への記録は行わない。
+    public var isTerminalClient: Bool?
 
     public init(
         event: KeyEventCore,
@@ -350,7 +354,8 @@ public struct ConverterKeyEventRequest: Codable, Sendable, Equatable {
         optionDirectInputText: String? = nil,
         context: ConverterTextContext = .init(),
         visibleCandidateStartIndex: Int = 0,
-        isSensitiveClient: Bool? = nil
+        isSensitiveClient: Bool? = nil,
+        isTerminalClient: Bool? = nil
     ) {
         self.event = event
         self.inputState = inputState
@@ -367,6 +372,7 @@ public struct ConverterKeyEventRequest: Codable, Sendable, Equatable {
         self.context = context
         self.visibleCandidateStartIndex = visibleCandidateStartIndex
         self.isSensitiveClient = isSensitiveClient
+        self.isTerminalClient = isTerminalClient
     }
 }
 

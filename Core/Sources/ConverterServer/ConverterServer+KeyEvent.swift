@@ -14,6 +14,8 @@ extension ConverterServer {
         session.manager.setCurrentInputLanguage(request.inputLanguage)
         // Kiwi: パスワードマネージャー等では履歴記録・LLM 送出を停止する。
         session.manager.setSensitiveClient(request.isSensitiveClient ?? false)
+        // Kiwi: ターミナルではシェル履歴コマンド・パス補完をサジェストする。
+        session.manager.setTerminalClient(request.isTerminalClient ?? false)
         Config.DebugPredictiveTyping().value = request.enablePredictiveTyping
         Config.DebugTypoCorrection().value = request.enableTypoCorrection
 

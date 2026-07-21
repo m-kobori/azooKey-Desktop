@@ -404,7 +404,9 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             optionDirectInputText: optionDirectInputText,
             context: self.currentConverterTextContext(),
             // Kiwi: 1Password 等のパスワードマネージャーでは履歴記録・LLM 送出を停止する。
-            isSensitiveClient: SensitiveClientList.isSensitive(bundleIdentifier: client.bundleIdentifier())
+            isSensitiveClient: SensitiveClientList.isSensitive(bundleIdentifier: client.bundleIdentifier()),
+            // Kiwi: ターミナルではシェル履歴コマンド・パス補完をサジェストする。
+            isTerminalClient: TerminalClientList.isTerminal(bundleIdentifier: client.bundleIdentifier())
         )
         guard let response = self.converterServerClient.sendSync({ _ in
             .handleKeyEvent(request)

@@ -57,11 +57,67 @@ public final class SegmentsManager {
         self.isSensitiveClient = sensitive
     }
 
+    /// Kiwi: クライアントがターミナルアプリか。true の間、英語 composing で
+    /// シェル履歴コマンド・パス補完をサジェストし、英語確定の履歴記録は行わない。
+    private var isTerminalClient: Bool = false
+
+    /// Kiwi: シェル履歴（~/.zsh_history 等）由来のコマンドサジェスト提供。
+    private let shellHistoryProvider = ShellHistoryProvider()
+
+    /// Kiwi: ターミナル向けサジェスト（コマンド・パス）の Candidate 列。
+    /// `updateRawCandidate` で再計算し、`suggestionLeadCandidates` の先頭へ差し込む。
+    private var terminalSuggestionCandidates: [Candidate] = []
+
+    /// Kiwi: サーバのキーイベント処理からターミナルクライアント判定を伝える。
+    public func setTerminalClient(_ terminal: Bool) {
+        self.isTerminalClient = terminal
+    }
+
+    /// Kiwi: ターミナル向けサジェスト（シェル履歴コマンド → パス補完）を再計算する。
+    /// 英語 composing のみ対象（コマンドは ASCII。日本語入力は通常動作）。
+    @MainActor private func updateTerminalSuggestionCandidates() {
+        guard Config.KiwiTerminalSuggestionEnabled().value,
+              self.isTerminalClient,
+              self.currentInputLanguage == .english else {
+            self.terminalSuggestionCandidates = []
+            return
+        }
+        let target = self.convertTarget
+        guard target.count >= 2 else {
+            self.terminalSuggestionCandidates = []
+            return
+        }
+        let inputCount = self.composingText.input.count
+        let commands = self.shellHistoryProvider.suggest(prefix: target, limit: 3)
+        let paths = PathCompleter.suggest(composing: target, limit: 3)
+        var seen = Set<String>()
+        self.terminalSuggestionCandidates = (commands + paths)
+            .filter { !$0.isEmpty && $0 != target && seen.insert($0).inserted }
+            .map { suggestion in
+                Candidate(
+                    text: suggestion,
+                    value: 0,
+                    composingCount: .inputCount(inputCount),
+                    lastMid: MIDData.一般.mid,
+                    data: [DicdataElement(
+                        word: suggestion,
+                        ruby: suggestion.toKatakana(),
+                        cid: CIDData.固有名詞.cid,
+                        mid: MIDData.一般.mid,
+                        value: 0
+                    )]
+                )
+            }
+    }
+
     /// Kiwi: 英語モードで確定したテキストを履歴に記録する（読み＝表記）。
     /// 次回、先頭数文字のプレフィックス一致でサジェストされる。
     public func recordEnglishCommit(_ text: String, leftSideContext: String) {
         // センシティブなクライアント（パスワードマネージャー等）では記録しない。
         guard !self.isSensitiveClient else { return }
+        // ターミナルでは記録しない（シェルコマンドで通常アプリのサジェストを汚さない。
+        // コマンドのサジェストはシェル履歴を直接ソースにする）。
+        guard !self.isTerminalClient else { return }
         guard Config.KiwiHistoryEnabled().value, let historyManager = self.historyManager else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return }
@@ -410,6 +466,7 @@ public final class SegmentsManager {
         self.rawCandidates = nil
         self.historyPredictionCandidates = []
         self.suggestionHistoryCandidates = []
+        self.terminalSuggestionCandidates = []
         self.preferSuggestionSelection = false
         self.clearLLMRevision()
         self.didExperienceSegmentEdition = false
@@ -431,6 +488,7 @@ public final class SegmentsManager {
         self.rawCandidates = nil
         self.historyPredictionCandidates = []
         self.suggestionHistoryCandidates = []
+        self.terminalSuggestionCandidates = []
         self.preferSuggestionSelection = false
         self.clearLLMRevision()
         self.didExperienceSegmentEdition = false
@@ -638,13 +696,13 @@ public final class SegmentsManager {
         }
     }
 
-    /// Kiwi: サジェスト（前方一致履歴＋辞書予測＋準備済み LLM 補正）の結合リスト（surface で dedup）。
+    /// Kiwi: サジェスト（ターミナル＋前方一致履歴＋辞書予測＋準備済み LLM 補正）の結合リスト（surface で dedup）。
     /// 入力中の候補ウィンドウ表示と、下キーのサジェスト選択の両方で同じ内容を使う。
-    /// 順序: 履歴（個人の実績）→ 辞書予測（一般語彙）→ LLM 補正。
+    /// 順序: ターミナル（コマンド/パス）→ 履歴（個人の実績）→ 辞書予測（一般語彙）→ LLM 補正。
     private var suggestionLeadCandidates: [Candidate] {
         let llmCandidates = self.llmRevisedTarget == self.convertTarget ? self.llmRevisedCandidates : []
         var seen = Set<String>()
-        return (self.suggestionHistoryCandidates + self.dictionaryPredictionSuggestionCandidates + llmCandidates)
+        return (self.terminalSuggestionCandidates + self.suggestionHistoryCandidates + self.dictionaryPredictionSuggestionCandidates + llmCandidates)
             .filter { seen.insert($0.text).inserted }
     }
 
@@ -745,6 +803,7 @@ public final class SegmentsManager {
             self.rawCandidates = nil
             self.historyPredictionCandidates = []
             self.suggestionHistoryCandidates = []
+            self.terminalSuggestionCandidates = []
             self.clearLLMRevision()
             self.kanaKanjiConverter.stopComposition()
             return
@@ -797,6 +856,7 @@ public final class SegmentsManager {
         )
         self.rawCandidates = result
         self.updateHistoryPredictionCandidates(leftSideContext: leftSideContext)
+        self.updateTerminalSuggestionCandidates()
         self.scheduleLLMRevision(leftSideContext: leftSideContext)
     }
 

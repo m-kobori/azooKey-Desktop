@@ -94,4 +94,10 @@ extension Config {
         static let `default` = true
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.dictionaryPredictionEnabled"
     }
+    /// Kiwi: ターミナル上でシェル履歴からのコマンドサジェスト・パス補完を出す設定。
+    public struct KiwiTerminalSuggestionEnabled: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.kiwi.terminalSuggestionEnabled"
+    }
 }

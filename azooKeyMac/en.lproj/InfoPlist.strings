@@ -6,7 +6,8 @@
   
 */
 
-CFBundleName = "azooKey";
+/* Kiwi: 入力ソースの表示名（識別子・bundle ID は azooKey のまま変更しない） */
+CFBundleName = "Kiwi";
 
-com.apple.inputmethod.Roman = "azooKey (English)";
-com.apple.inputmethod.Japanese = "azooKey (日本語)";
+com.apple.inputmethod.Roman = "Kiwi (English)";
+com.apple.inputmethod.Japanese = "Kiwi (日本語)";

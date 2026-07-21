@@ -117,7 +117,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             containerURL: containerURL
         )
 
-        self.appMenu = NSMenu(title: "azooKey")
+        self.appMenu = NSMenu(title: "Kiwi")
         self.liveConversionToggleMenuItem = NSMenuItem()
         self.transformSelectedTextMenuItem = NSMenuItem()
 

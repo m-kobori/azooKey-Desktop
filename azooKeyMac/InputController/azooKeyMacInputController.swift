@@ -402,7 +402,9 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             enableOptionDirectFullWidthInput: Config.OptionDirectFullWidthInput().value,
             typeBackSlash: Config.TypeBackSlash().value,
             optionDirectInputText: optionDirectInputText,
-            context: self.currentConverterTextContext()
+            context: self.currentConverterTextContext(),
+            // Kiwi: 1Password 等のパスワードマネージャーでは履歴記録・LLM 送出を停止する。
+            isSensitiveClient: SensitiveClientList.isSensitive(bundleIdentifier: client.bundleIdentifier())
         )
         guard let response = self.converterServerClient.sendSync({ _ in
             .handleKeyEvent(request)

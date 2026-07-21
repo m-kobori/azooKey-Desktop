@@ -12,6 +12,8 @@ extension ConverterServer {
         session.setContext(request.context)
         // Kiwi: 現在の入力言語を manager に伝える（英語 composing 時のライブ変換抑制・履歴記録用）。
         session.manager.setCurrentInputLanguage(request.inputLanguage)
+        // Kiwi: パスワードマネージャー等では履歴記録・LLM 送出を停止する。
+        session.manager.setSensitiveClient(request.isSensitiveClient ?? false)
         Config.DebugPredictiveTyping().value = request.enablePredictiveTyping
         Config.DebugTypoCorrection().value = request.enableTypoCorrection
 

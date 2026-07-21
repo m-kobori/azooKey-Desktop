@@ -48,9 +48,20 @@ public final class SegmentsManager {
         self.currentInputLanguage = language
     }
 
+    /// Kiwi: クライアントがパスワードマネージャー等のセンシティブなアプリか。
+    /// true の間は履歴記録と LLM 送出を停止する（変換・サジェスト表示は通常どおり）。
+    private var isSensitiveClient: Bool = false
+
+    /// Kiwi: サーバのキーイベント処理からセンシティブクライアント判定を伝える。
+    public func setSensitiveClient(_ sensitive: Bool) {
+        self.isSensitiveClient = sensitive
+    }
+
     /// Kiwi: 英語モードで確定したテキストを履歴に記録する（読み＝表記）。
     /// 次回、先頭数文字のプレフィックス一致でサジェストされる。
     public func recordEnglishCommit(_ text: String, leftSideContext: String) {
+        // センシティブなクライアント（パスワードマネージャー等）では記録しない。
+        guard !self.isSensitiveClient else { return }
         guard Config.KiwiHistoryEnabled().value, let historyManager = self.historyManager else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return }
@@ -157,6 +168,8 @@ public final class SegmentsManager {
     /// Kiwi: 確定した候補を履歴に記録する。DB 書き込みでメインスレッドをブロックしないよう
     /// 値をコピーしてバックグラウンドで実行する。
     private func recordHistoryIfNeeded(_ candidate: Candidate, leftSideContext: String) {
+        // センシティブなクライアント（パスワードマネージャー等）では記録しない。
+        guard !self.isSensitiveClient else { return }
         guard Config.KiwiHistoryEnabled().value, let historyManager = self.historyManager else { return }
         let reading = self.candidateReading(candidate).toHiragana()
         let surface = candidate.text
@@ -809,6 +822,11 @@ public final class SegmentsManager {
     }
 
     @MainActor private func scheduleLLMRevision(leftSideContext: String?) {
+        // センシティブなクライアント（パスワードマネージャー等）では入力・文脈を LLM に渡さない。
+        guard !self.isSensitiveClient else {
+            self.clearLLMRevision()
+            return
+        }
         guard Config.KiwiLLMReviserEnabled().value, let llmReviser = self.llmReviser else {
             self.llmRevisedCandidates = []
             self.llmRevisedTarget = ""

@@ -331,6 +331,9 @@ public struct ConverterKeyEventRequest: Codable, Sendable, Equatable {
     public var optionDirectInputText: String?
     public var context: ConverterTextContext
     public var visibleCandidateStartIndex: Int
+    /// Kiwi: クライアントがパスワードマネージャー等のセンシティブなアプリのとき true。
+    /// Server は履歴記録・LLM 送出を停止する（表示・変換は通常どおり）。
+    public var isSensitiveClient: Bool?
 
     public init(
         event: KeyEventCore,
@@ -346,7 +349,8 @@ public struct ConverterKeyEventRequest: Codable, Sendable, Equatable {
         typeBackSlash: Bool = false,
         optionDirectInputText: String? = nil,
         context: ConverterTextContext = .init(),
-        visibleCandidateStartIndex: Int = 0
+        visibleCandidateStartIndex: Int = 0,
+        isSensitiveClient: Bool? = nil
     ) {
         self.event = event
         self.inputState = inputState
@@ -362,6 +366,7 @@ public struct ConverterKeyEventRequest: Codable, Sendable, Equatable {
         self.optionDirectInputText = optionDirectInputText
         self.context = context
         self.visibleCandidateStartIndex = visibleCandidateStartIndex
+        self.isSensitiveClient = isSensitiveClient
     }
 }
 
